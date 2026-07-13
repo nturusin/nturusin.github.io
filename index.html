@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Nick Turusin</title>
+<title>Nikolai Turusin</title>
 <meta name="description" content="Notes on machine learning, LLM systems, and the engineering around them.">
 <link rel="canonical" href="https://nturusin.github.io/">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Nick Turusin">
+<meta property="og:title" content="Nikolai Turusin">
 <meta property="og:description" content="Notes on machine learning, LLM systems, and the engineering around them.">
 <meta property="og:url" content="https://nturusin.github.io/">
 <style>
   :root{
-    --bg:#FAFAF8; --ink:#1A1C22; --mut:#5C6470; --dim:#9AA1AC; --line:#E7E7E1; --line2:#D6D6CF;
+    --bg:#FAFAF8; --ink:#1A1C22; --mut:#5C6470; --dim:#9AA1AC; --line:#EAEAE4; --line2:#DCDCD4;
     --verdict:#4338CA; --verdict-ink:#3730A3;
     --disp:"Avenir Next","Helvetica Neue",Helvetica,system-ui,sans-serif;
     --serif:Charter,"Iowan Old Style",Georgia,"Times New Roman",serif;
@@ -20,55 +20,75 @@
     color-scheme:light;
   }
   @media (prefers-color-scheme:dark){:root{
-    --bg:#101217; --ink:#E9EAEE; --mut:#A6ACB8; --dim:#6C7380; --line:#262A33; --line2:#333845;
+    --bg:#0F1116; --ink:#E9EAEE; --mut:#A6ACB8; --dim:#6C7380; --line:#22262F; --line2:#2E333D;
     --verdict:#8D8BF9; --verdict-ink:#B4B2FF; color-scheme:dark;
   }}
-  :root[data-theme="light"]{--bg:#FAFAF8;--ink:#1A1C22;--mut:#5C6470;--dim:#9AA1AC;--line:#E7E7E1;--line2:#D6D6CF;--verdict:#4338CA;--verdict-ink:#3730A3;color-scheme:light}
-  :root[data-theme="dark"]{--bg:#101217;--ink:#E9EAEE;--mut:#A6ACB8;--dim:#6C7380;--line:#262A33;--line2:#333845;--verdict:#8D8BF9;--verdict-ink:#B4B2FF;color-scheme:dark}
+  :root[data-theme="light"]{--bg:#FAFAF8;--ink:#1A1C22;--mut:#5C6470;--dim:#9AA1AC;--line:#EAEAE4;--line2:#DCDCD4;--verdict:#4338CA;--verdict-ink:#3730A3;color-scheme:light}
+  :root[data-theme="dark"]{--bg:#0F1116;--ink:#E9EAEE;--mut:#A6ACB8;--dim:#6C7380;--line:#22262F;--line2:#2E333D;--verdict:#8D8BF9;--verdict-ink:#B4B2FF;color-scheme:dark}
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--serif);font-size:18px;line-height:1.7;-webkit-font-smoothing:antialiased}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--serif);font-size:18px;line-height:1.7;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
   a{color:var(--verdict);text-decoration:none}
   a:hover{text-decoration:underline}
   ::selection{background:var(--verdict);color:#fff}
-  .wrap{max-width:720px;margin:0 auto;padding:0 22px}
-  header.site{padding:96px 0 30px;border-bottom:1px solid var(--line)}
-  h1.name{font-family:var(--disp);font-weight:700;font-size:clamp(30px,5vw,40px);letter-spacing:-.015em;margin:0 0 12px}
-  .tag{color:var(--mut);font-size:18px;margin:0;max-width:52ch}
-  .links{margin-top:18px;font-family:var(--mono);font-size:13px;color:var(--dim)}
-  .links a{color:var(--mut)}
+  :focus-visible{outline:2.5px solid var(--verdict);outline-offset:3px;border-radius:4px}
+
+  .wrap{max-width:660px;margin:0 auto;padding:0 24px}
+
+  header.site{padding:120px 0 40px}
+  h1.name{font-family:var(--disp);font-weight:700;font-size:clamp(34px,6vw,48px);letter-spacing:-.025em;line-height:1.02;margin:0 0 20px}
+  .tag{color:var(--mut);font-size:19px;line-height:1.5;margin:0;max-width:44ch;text-wrap:pretty}
+  .links{margin-top:26px;display:flex;gap:22px;font-family:var(--mono);font-size:13px}
+  .links a{color:var(--dim);text-decoration:none;transition:color .15s ease}
   .links a:hover{color:var(--verdict-ink)}
-  .sep{margin:0 8px;color:var(--line2)}
-  h2.section{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);font-weight:700;margin:46px 0 8px}
+
+  .rule{height:1px;background:var(--line);border:0;margin:8px 0 0}
+
+  h2.section{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--dim);font-weight:400;margin:52px 0 6px}
+
   ul.posts{list-style:none;margin:0;padding:0}
-  ul.posts li{padding:24px 0;border-bottom:1px solid var(--line)}
-  .pdate{font-family:var(--mono);font-size:12px;letter-spacing:.04em;color:var(--dim);text-transform:uppercase}
-  .ptitle{font-family:var(--disp);font-weight:700;font-size:23px;letter-spacing:-.01em;line-height:1.25;margin:6px 0 8px}
-  .ptitle a{color:var(--ink)}
-  .ptitle a:hover{color:var(--verdict-ink);text-decoration:none}
-  .pdek{color:var(--mut);font-size:16.5px;margin:0;max-width:60ch}
-  footer{color:var(--dim);font-family:var(--mono);font-size:11.5px;padding:40px 0 70px}
+  ul.posts li{border-bottom:1px solid var(--line)}
+  a.post{display:block;padding:26px 4px;color:inherit;text-decoration:none;transition:padding .2s ease}
+  a.post:hover{text-decoration:none;padding-left:12px}
+  .pdate{font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--dim);text-transform:uppercase}
+  .ptitle{font-family:var(--disp);font-weight:700;font-size:24px;letter-spacing:-.012em;line-height:1.22;margin:8px 0 9px;color:var(--ink);transition:color .15s ease}
+  .arw{display:inline-block;margin-left:.35em;color:var(--verdict);opacity:0;transform:translateX(-5px);transition:opacity .18s ease,transform .18s ease}
+  a.post:hover .ptitle{color:var(--verdict-ink)}
+  a.post:hover .arw{opacity:1;transform:translateX(0)}
+  .pdek{color:var(--mut);font-size:16.5px;line-height:1.55;margin:0;max-width:56ch;text-wrap:pretty}
+
+  footer{color:var(--dim);font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;padding:56px 0 80px}
+
+  @media (prefers-reduced-motion:reduce){
+    a.post,a.post:hover,.arw{transition:none;padding-left:4px;transform:none}
+    a.post:hover .arw{opacity:1}
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header class="site">
-    <h1 class="name">Nick Turusin</h1>
+    <h1 class="name">Nikolai Turusin</h1>
     <p class="tag">Notes on machine learning, LLM systems, and the engineering around them.</p>
     <div class="links">
-      <a href="https://github.com/nturusin">github</a>
+      <a href="https://github.com/nturusin">GitHub</a>
     </div>
   </header>
+
+  <hr class="rule">
 
   <h2 class="section">Writing</h2>
   <ul class="posts">
     <li>
-      <div class="pdate">July 13, 2026</div>
-      <div class="ptitle"><a href="act-on-the-verdict.html">Act on the Verdict. Stream the Rest.</a></div>
-      <p class="pdek">How we cut median LLM time-to-act from 1.33s to 0.65s by putting the decision fields first in a streamed structured output.</p>
+      <a class="post" href="act-on-the-verdict.html">
+        <div class="pdate">July 13, 2026</div>
+        <div class="ptitle">Act on the Verdict. Stream the Rest.<span class="arw">→</span></div>
+        <p class="pdek">How we cut median LLM time-to-act from 1.33s to 0.65s by putting the decision fields first in a streamed structured output.</p>
+      </a>
     </li>
   </ul>
 
-  <footer>© Nick Turusin</footer>
+  <footer>© 2026 Nikolai Turusin</footer>
 </div>
 </body>
 </html>
