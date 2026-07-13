@@ -389,23 +389,16 @@
   <p>Structured output changes what can be inferred from that buffer. When a provider enforces the schema during decoding, the model is no longer free to produce arbitrary text. That is a useful foundation, but it does not, by itself, make an early commit safe. The difficult part is knowing when a field is <i>finished</i>.</p>
 
   <h2 id="presence">Presence is not finality</h2>
-  <p>Partial-JSON parsers can inspect an incomplete buffer and report that a field appears to be present.</p>
-  <p>That is useful for rendering interfaces. It is not necessarily sufficient for committing a decision.</p>
-  <p class="codenote">Consider this prefix:</p>
+  <p>A partial-JSON parser may tell you that a field has appeared in the buffer. That does not mean its value is complete.</p>
+  <p class="codenote">Consider:</p>
   <pre class="code" aria-label="A JSON prefix ending at confidence colon eight">{
   <span class="k">"category"</span>: <span class="s">"04_meals"</span>,
   <span class="k">"confidence"</span>: 8</pre>
-  <p>A parser may already be able to identify confidence.</p>
-  <p>But is its value 8?</p>
-  <p class="codenote">The next frame may contain:</p>
-  <pre class="code" aria-label="The next frame: seven comma">7,</pre>
-  <p>The final value was 87.</p>
-  <p>Rendering an 8 for a fraction of a second is harmless. Writing it to a database, routing a transaction, or triggering an external action is not.</p>
-  <p>For a JSON string, that evidence is the closing quote. For a number, it is a valid terminator: a comma, closing brace, or whitespace that ends the JSON number.</p>
-
-  <p><b>A partial parse that can disagree with the final parse is not a parse. It is a guess.</b></p>
-
-  <p>This is why early commit is not simply "parse whatever fields have arrived." It is an attempt to construct an <b>immutable prefix</b>: a portion of the response whose meaning is already final even though the complete document is not.</p>
+  <p class="codenote">The parser can already see confidence, but the next chunk may contain:</p>
+  <pre class="code" aria-label="The next chunk: seven comma">7,</pre>
+  <p>The final value is 87, not 8.</p>
+  <p>A string is complete only after its closing quote. A number is complete only after a valid terminator, such as a comma, closing brace, or whitespace.</p>
+  <p>A partial parse that may disagree with the final JSON is not safe to use. Early commit therefore means finding a prefix whose meaning can no longer change, even though the full response is still arriving.</p>
 
   <h2 id="schedule">The schema is also a schedule</h2>
   <p>The first implementation step was almost disappointingly simple: we placed the verdict fields first.</p>
