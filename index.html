@@ -48,8 +48,12 @@
 
   ul.posts{list-style:none;margin:0;padding:0}
   ul.posts li{border-bottom:1px solid var(--line)}
-  a.post{display:block;padding:26px 4px;color:inherit;text-decoration:none;transition:padding .2s ease}
-  a.post:hover{text-decoration:none;padding-left:12px}
+  a.post{display:flex;gap:26px;align-items:flex-start;padding:26px 4px;color:inherit;text-decoration:none}
+  a.post:hover{text-decoration:none}
+  .thumb{flex:none;width:224px;aspect-ratio:3/2;border-radius:10px;overflow:hidden;border:1px solid var(--line2);background:var(--line)}
+  .thumb img{display:block;width:100%;height:100%;object-fit:cover;transition:transform .3s ease}
+  a.post:hover .thumb img{transform:scale(1.035)}
+  .ptext{flex:1;min-width:0}
   .pdate{font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--dim);text-transform:uppercase}
   .ptitle{font-family:var(--disp);font-weight:700;font-size:24px;letter-spacing:-.012em;line-height:1.22;margin:8px 0 9px;color:var(--ink);transition:color .15s ease}
   .arw{display:inline-block;margin-left:.35em;color:var(--verdict);opacity:0;transform:translateX(-5px);transition:opacity .18s ease,transform .18s ease}
@@ -59,8 +63,12 @@
 
   footer{color:var(--dim);font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;padding:56px 0 80px}
 
+  @media (max-width:600px){
+    a.post{flex-direction:column;gap:14px}
+    .thumb{width:100%}
+  }
   @media (prefers-reduced-motion:reduce){
-    a.post,a.post:hover,.arw{transition:none;padding-left:4px;transform:none}
+    .arw,.thumb img{transition:none;transform:none}
     a.post:hover .arw{opacity:1}
   }
 </style>
@@ -81,9 +89,12 @@
   <ul class="posts">
     <li>
       <a class="post" href="act-on-the-verdict.html">
-        <div class="pdate">July 13, 2026</div>
-        <div class="ptitle">Act on the Verdict. Stream the Rest.<span class="arw">→</span></div>
-        <p class="pdek">How we cut median LLM time-to-act from 1.33s to 0.65s by putting the decision fields first in a streamed structured output.</p>
+        <div class="thumb"><img src="assets/cover.jpg" alt="" loading="lazy" width="1440" height="960"></div>
+        <div class="ptext">
+          <div class="pdate">July 13, 2026</div>
+          <div class="ptitle">Act on the Verdict. Stream the Rest.<span class="arw">→</span></div>
+          <p class="pdek">How we cut median LLM time-to-act from 1.33s to 0.65s by putting the decision fields first in a streamed structured output.</p>
+        </div>
       </a>
     </li>
   </ul>
