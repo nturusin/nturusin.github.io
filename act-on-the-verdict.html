@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Act on the Verdict. Stream the Rest.</title>
+<meta name="description" content="How we cut median LLM time-to-act from 1.33s to 0.65s by putting the decision fields first in a streamed structured output, then draining the explanation in the background.">
+<link rel="canonical" href="https://nturusin.github.io/act-on-the-verdict.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Act on the Verdict. Stream the Rest.">
+<meta property="og:description" content="How we cut median LLM time-to-act from 1.33s to 0.65s by putting the decision fields first in a streamed structured output, then draining the explanation in the background.">
+<meta property="og:url" content="https://nturusin.github.io/act-on-the-verdict.html">
+<meta property="og:image" content="https://nturusin.github.io/assets/cover.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Act on the Verdict. Stream the Rest.">
+<meta name="twitter:description" content="How we cut median LLM time-to-act from 1.33s to 0.65s by putting the decision fields first in a streamed structured output, then draining the explanation in the background.">
+<meta name="twitter:image" content="https://nturusin.github.io/assets/cover.jpg">
+<style>
+  :root{
+    --bg:#FAFAF8; --card:#FFFFFF; --ink:#1A1C22; --mut:#5C6470; --dim:#9AA1AC;
+    --line:#E7E7E1; --line2:#D6D6CF;
+    --verdict:#4338CA; --verdict-soft:#EDECFB; --verdict-ink:#3730A3;
+    --essay:#A9AEB9; --essay-soft:#F0F1F3;
+    --good:#0E9F6E; --good-soft:#E3F4EC;
+    --warn:#B45309; --warn-soft:#FAF0DF;
+    --bad:#C0424D; --bad-soft:#F9E9EA;
+    --codebg:#F4F4EE; --grid:rgba(67,56,202,.055);
+    --disp:"Avenir Next","Helvetica Neue",Helvetica,system-ui,sans-serif;
+    --serif:Charter,"Iowan Old Style",Georgia,"Times New Roman",serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --shadow:0 1px 2px rgba(20,22,30,.05),0 6px 24px rgba(20,22,30,.05);
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#101217; --card:#171A21; --ink:#E9EAEE; --mut:#A6ACB8; --dim:#6C7380;
+    --line:#262A33; --line2:#333845;
+    --verdict:#8D8BF9; --verdict-soft:#232046; --verdict-ink:#B4B2FF;
+    --essay:#5B6270; --essay-soft:#20242D;
+    --good:#3FC493; --good-soft:#12291F;
+    --warn:#E0A23C; --warn-soft:#2A2113;
+    --bad:#E27E88; --bad-soft:#2A171A;
+    --codebg:#1C1F27; --grid:rgba(141,139,249,.10);
+    --shadow:0 1px 2px rgba(0,0,0,.35),0 8px 28px rgba(0,0,0,.3);
+  }}
+  :root[data-theme="light"]{
+    --bg:#FAFAF8; --card:#FFFFFF; --ink:#1A1C22; --mut:#5C6470; --dim:#9AA1AC;
+    --line:#E7E7E1; --line2:#D6D6CF;
+    --verdict:#4338CA; --verdict-soft:#EDECFB; --verdict-ink:#3730A3;
+    --essay:#A9AEB9; --essay-soft:#F0F1F3;
+    --good:#0E9F6E; --good-soft:#E3F4EC;
+    --warn:#B45309; --warn-soft:#FAF0DF;
+    --bad:#C0424D; --bad-soft:#F9E9EA;
+    --codebg:#F4F4EE; --grid:rgba(67,56,202,.055);
+    --shadow:0 1px 2px rgba(20,22,30,.05),0 6px 24px rgba(20,22,30,.05);
+  }
+  :root[data-theme="dark"]{
+    --bg:#101217; --card:#171A21; --ink:#E9EAEE; --mut:#A6ACB8; --dim:#6C7380;
+    --line:#262A33; --line2:#333845;
+    --verdict:#8D8BF9; --verdict-soft:#232046; --verdict-ink:#B4B2FF;
+    --essay:#5B6270; --essay-soft:#20242D;
+    --good:#3FC493; --good-soft:#12291F;
+    --warn:#E0A23C; --warn-soft:#2A2113;
+    --bad:#E27E88; --bad-soft:#2A171A;
+    --codebg:#1C1F27; --grid:rgba(141,139,249,.10);
+    --shadow:0 1px 2px rgba(0,0,0,.35),0 8px 28px rgba(0,0,0,.3);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  html,body{height:auto;overflow-y:auto}
+  article h2,figure.fig{scroll-margin-top:26px}
+  .toc{display:none}
+  @media (min-width:1320px){
+    .toc{display:block;position:fixed;top:96px;left:max(18px,calc(50% - 660px));width:200px;font-family:var(--mono);font-size:11px;line-height:1.45;z-index:5}
+    .toc .tt{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);margin-bottom:10px}
+    .toc .tp{font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--verdict);margin:12px 0 4px;font-weight:700}
+    .toc a{display:block;color:var(--dim);padding:4px 0 4px 12px;border-left:1.5px solid var(--line);text-decoration:none}
+    .toc a.fg{font-size:10px;color:var(--dim);opacity:.85}
+    .toc a:hover{color:var(--verdict-ink);border-left-color:var(--verdict);text-decoration:none}
+    .tocm{display:none}
+  }
+  .tocm{margin:28px 0 4px;font-family:var(--mono);font-size:12px}
+  .tocm summary{cursor:pointer;color:var(--dim);letter-spacing:.14em;text-transform:uppercase;font-size:10.5px}
+  .tocm a{display:inline-block;color:var(--mut);margin:8px 16px 0 0;text-decoration:none}
+  .tocm a:hover{color:var(--verdict-ink)}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--serif);font-size:18px;line-height:1.72}
+  ::selection{background:var(--verdict);color:#fff}
+  a{color:var(--verdict);text-decoration:none}
+  a:hover{text-decoration:underline}
+  :focus-visible{outline:2.5px solid var(--verdict);outline-offset:2px;border-radius:4px}
+
+  .wrap{max-width:720px;margin:0 auto;padding:0 22px}
+  .wide{max-width:860px;margin-left:auto;margin-right:auto;padding:0 22px}
+
+  header.hero{padding:40px 0 12px}
+  .coverimg{display:block;width:100%;height:auto;border-radius:12px;margin:6px 0 4px;box-shadow:var(--shadow)}
+  h1{font-family:var(--disp);font-weight:700;font-size:clamp(34px,6vw,52px);line-height:1.08;letter-spacing:-.015em;margin:0 0 18px;text-wrap:balance}
+  .standfirst{font-size:21px;line-height:1.55;color:var(--mut);margin:0 0 26px;max-width:56ch;text-wrap:pretty}
+
+  .cover{position:relative;margin:40px 0 4px;padding:36px 0 74px;border-top:1px solid var(--line2);border-bottom:1px solid var(--line2)}
+  .coverrow{display:flex;align-items:center;gap:14px;font-family:var(--mono);font-size:13.5px;white-space:nowrap}
+  .cover .cv{color:var(--verdict-ink);font-weight:700;flex:none}
+  .cover .cl{flex:none;height:52px;border-left:3px solid var(--verdict);position:relative}
+  .cover .cl i{position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);font-style:normal;font-size:10.5px;font-weight:700;letter-spacing:.1em;color:var(--verdict-ink);white-space:nowrap;text-align:center;line-height:1.55}
+  .cover .cewrap{flex:1;min-width:0;overflow:hidden;position:relative}
+  .cover .ce{display:block;color:var(--dim);overflow:hidden}
+  .cover .cefade{position:absolute;inset:0;background:linear-gradient(90deg,transparent 0%,transparent 30%,var(--bg) 96%)}
+  .cover .cb{flex:none;position:relative;color:var(--mut);font-weight:700}
+  .cover .cb i{position:absolute;top:calc(100% + 9px);right:-2px;font-style:normal;font-size:11px;color:var(--dim)}
+  .cover .tag{position:absolute;left:0;right:0;bottom:12px;text-align:center;font-family:var(--serif);font-size:14.5px;color:var(--mut)}
+  @media (max-width:560px){.coverrow{font-size:10.5px;gap:9px}}
+  .idea{border-top:1px solid var(--line2);border-bottom:1px solid var(--line2);padding:20px 4px;margin:36px 0;font-family:var(--disp);font-size:18.5px;font-weight:600;color:var(--ink);line-height:1.5;text-wrap:pretty}
+  .idea .t{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--verdict);margin-bottom:6px}
+  .part{margin:88px 0 6px;border-top:2px solid var(--ink);padding-top:16px}
+  .part .pn{font-family:var(--mono);font-size:11px;letter-spacing:.18em;color:var(--verdict);text-transform:uppercase;margin-bottom:8px;font-weight:700}
+  .part .pq{font-family:var(--disp);font-weight:700;font-size:24px;letter-spacing:-.01em;color:var(--ink);text-wrap:balance}
+
+
+  article{padding:26px 0 60px}
+  article h2{font-family:var(--disp);font-weight:700;font-size:29px;letter-spacing:-.01em;line-height:1.2;margin:58px 0 16px;text-wrap:balance}
+  article h3{font-family:var(--disp);font-weight:650;font-size:17.5px;letter-spacing:-.01em;margin:30px 0 10px;color:var(--ink)}
+  article p{margin:0 0 20px}
+  article ul.plain,article ol.plain{margin:0 0 20px;padding-left:26px}
+  article ul.plain li,article ol.plain li{margin-bottom:7px;line-height:1.65}
+  code{font-family:var(--mono);font-size:.84em;background:var(--codebg);border:1px solid var(--line);padding:1px 6px;border-radius:6px}
+  .pull{font-family:var(--disp);font-weight:700;font-size:26px;line-height:1.35;letter-spacing:-.01em;color:var(--ink);
+    border-top:1px solid var(--line2);border-bottom:1px solid var(--line2);padding:26px 8px;margin:60px 0;text-align:center;text-wrap:balance}
+  .pull .m{color:var(--verdict)}
+  .aside{font-family:var(--disp);font-size:15px;color:var(--mut);background:var(--essay-soft);border-radius:10px;padding:14px 18px;margin:0 0 20px}
+
+  figure.fig{position:relative;margin:38px 0;border:1px solid var(--line);border-radius:10px;padding:20px 22px 14px;overflow:hidden;background:var(--card)}
+  figure.fig.sheet{background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:22px 22px}
+  figure.fig.sheet::before{content:"";position:absolute;top:10px;left:10px;width:13px;height:13px;border-top:1.5px solid var(--line2);border-left:1.5px solid var(--line2)}
+  figure.fig.sheet::after{content:"";position:absolute;bottom:10px;right:10px;width:13px;height:13px;border-bottom:1.5px solid var(--line2);border-right:1.5px solid var(--line2)}
+  figure.fig.quiet{border:none;background:none;padding:0;overflow:visible;border-radius:0}
+  figure.fig.quiet figcaption{border-top:none;padding-top:8px}
+  figure.fig figcaption{font-family:var(--disp);font-size:13.5px;color:var(--mut);margin-top:16px;line-height:1.55;border-top:1px dashed var(--line);padding-top:12px}
+  figure.fig figcaption b{color:var(--ink)}
+  .fighead{display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap}
+  .fighead .fn{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--verdict);text-transform:uppercase;border:1px solid var(--verdict);border-radius:5px;padding:3px 9px;background:var(--card);flex:none}
+  .fighead .ft{font-family:var(--disp);font-weight:700;font-size:16.5px}
+
+  /* figure 1: how the commit point moved */
+  .f1{margin-top:2px}
+  .f1legend{display:flex;gap:20px;flex-wrap:wrap;font-family:var(--mono);font-size:10.5px;color:var(--mut);margin-bottom:20px}
+  .f1legend .sw{display:inline-block;width:11px;height:11px;border-radius:3px;vertical-align:-1px;margin-right:6px}
+  .f1legend .sw.v{background:var(--verdict)}
+  .f1legend .sw.e{background:var(--essay-soft);border:1px solid var(--line2)}
+  .f1legend .dot{color:var(--verdict);font-weight:700;margin-right:5px}
+  .f1row{display:flex;align-items:center;gap:14px;padding:8px 0}
+  .f1row .f1v{width:24px;flex:none;font-family:var(--mono);font-size:11px;font-weight:700;color:var(--dim)}
+  .f1track{position:relative;flex:1;min-width:0;height:30px}
+  .f1bar{display:flex;height:100%;width:100%}
+  .f1seg{flex:none;height:100%;display:flex;align-items:center;padding:0 8px;font-family:var(--mono);font-size:9.5px;letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:2px solid var(--bg)}
+  .f1seg.v{background:var(--verdict);color:#fff;font-weight:700}
+  .f1seg.e{background:var(--essay-soft);color:var(--dim)}
+  .f1commit{position:absolute;top:-7px;bottom:-7px;width:0;border-left:2.5px solid var(--verdict)}
+  .f1commit::before{content:"";position:absolute;left:-5px;top:-3px;width:10px;height:10px;border-radius:50%;background:var(--verdict);box-shadow:0 0 0 3px var(--bg)}
+  .f1annorow{display:flex;gap:14px;margin-top:4px}
+  .f1anno{flex:1;min-width:0;font-family:var(--mono);font-size:10px;color:var(--verdict-ink);text-align:right}
+  .f1anno .ar{font-size:13px;font-weight:700}
+  @media (max-width:560px){.f1seg{font-size:0;padding:0}.f1legend{gap:12px}}
+
+  /* figure 2: two schema bars with a commit flag */
+  .schemapair{display:flex;flex-direction:column;gap:34px;margin-top:8px}
+  .schemabar .sl{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-bottom:7px}
+  .barwrap{position:relative;margin-top:46px}
+  .schemabar .bar{display:flex;height:34px;border-radius:9px;overflow:hidden;border:1px solid var(--line)}
+  .seg{display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10.5px;white-space:nowrap;overflow:hidden}
+  .seg.v{background:var(--verdict);color:#fff;font-weight:700}
+  .seg.e{background:repeating-linear-gradient(135deg,var(--essay-soft) 0 9px,var(--card) 9px 15px);color:var(--dim)}
+  .commitflag{position:absolute;top:-11px;transform:translateY(-100%);background:var(--verdict);color:#fff;font-family:var(--disp);font-weight:700;font-size:12.5px;border-radius:8px;padding:6px 11px;white-space:nowrap;box-shadow:var(--shadow)}
+  .commitflag::after{content:"";position:absolute;top:100%;left:14px;border:6px solid transparent;border-top-color:var(--verdict)}
+  .commitflag.atright{right:-6px}
+  .commitflag.atright::after{left:auto;right:14px}
+  .commitflag.atleft{left:10%;margin-left:-20px}
+  .segkey{position:relative;height:18px;margin-top:7px;font-family:var(--mono);font-size:10.5px}
+  .segkey .kv{position:absolute;color:var(--verdict-ink);font-weight:700;white-space:nowrap}
+  .segkey .ke{position:absolute;transform:translateX(-50%);color:var(--dim);white-space:nowrap;max-width:70%;overflow:hidden;text-overflow:ellipsis}
+
+  /* figure 3: commit, wait, abort */
+  .tri{display:flex;flex-direction:column}
+  .srow{display:flex;gap:18px;align-items:baseline;flex-wrap:wrap;padding:12px 2px 12px 16px;border-left:3px solid var(--line2);border-bottom:1px dashed var(--line)}
+  .srow:last-child{border-bottom:none}
+  .srow.c{border-left-color:var(--verdict)}
+  .srow.w{border-left-color:var(--warn)}
+  .srow.a{border-left-color:var(--bad)}
+  .srow .buf{font-family:var(--mono);font-size:12.5px;color:var(--mut);flex:1;min-width:230px;word-break:break-all}
+  .srow .ev{font-family:var(--mono);font-size:11px;color:var(--dim);flex:none}
+  .srow .out{font-family:var(--mono);font-size:12.5px;font-weight:700;letter-spacing:.08em;flex:none;min-width:72px;text-align:right}
+  .srow.c .out{color:var(--verdict-ink)}
+  .srow.w .out{color:var(--warn)}
+  .srow.a .out{color:var(--bad)}
+  .buf .hv{background:color-mix(in srgb,var(--verdict) 15%,transparent);border-radius:3px}
+  .buf .hw{background:color-mix(in srgb,var(--warn) 22%,transparent);border-radius:3px}
+  .buf .hb{background:color-mix(in srgb,var(--bad) 17%,transparent);border-radius:3px}
+
+  /* figure 4: two zones, one boundary */
+  .tl2{position:relative;margin:52px 0 8px;padding-bottom:48px}
+  .tl2 .track{display:flex;height:36px;border-radius:9px;overflow:hidden;border:1px solid var(--line)}
+  .tl2 .zreq{width:48.9%;background:var(--verdict-soft);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--verdict-ink);white-space:nowrap;overflow:hidden}
+  .tl2 .zbg{flex:1;background:repeating-linear-gradient(135deg,var(--essay-soft) 0 9px,var(--card) 9px 15px);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);white-space:nowrap;overflow:hidden}
+  .tl2 .mark{position:absolute;top:48px;transform:translateX(-50%);text-align:center;font-family:var(--mono);font-size:11px;color:var(--ink);font-weight:700}
+  .tl2 .mark::before{content:"";position:absolute;left:50%;top:-9px;width:1.5px;height:7px;background:var(--line2)}
+  .tl2 .mark.hot{color:var(--verdict-ink)}
+  .tl2 .mark.hot::before{background:var(--verdict);width:2.5px}
+  .tl2 .m0{left:0;transform:none;text-align:left}
+  .tl2 .m0::before{left:1px}
+  .tl2 .mend{right:0;transform:none;text-align:right}
+  .tl2 .mend::before{left:auto;right:1px}
+
+  /* the race, static ladder */
+  .orace{font-family:var(--mono);font-size:13px;color:var(--mut);border-top:1px solid var(--line2);border-bottom:1px solid var(--line2);padding:14px 2px;margin:32px 0}
+  .orace .r{display:flex;gap:14px;flex-wrap:wrap;padding:4px 0}
+  .orace .t{width:48px;flex:none;color:var(--dim);font-size:11px}
+  .orace .w{width:100px;flex:none;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+  .orace .r.hum .w{color:var(--good);font-weight:700}
+  .orace .r.mod .w{color:var(--verdict-ink);font-weight:700}
+  .orace b{color:var(--ink)}
+  .strike{text-decoration:line-through;text-decoration-color:var(--bad);text-decoration-thickness:2px}
+
+  .numbers{width:100%;border-collapse:collapse;font-family:var(--disp);font-size:15px;margin:10px 0 6px}
+  .numbers th{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);text-align:left;padding:9px 12px;border-bottom:1.5px solid var(--line2)}
+  .numbers td{padding:11px 12px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+  .numbers td.big{font-family:var(--mono);font-weight:700;color:var(--verdict-ink);font-size:16px}
+  .numbers tr:last-child td{border-bottom:none}
+  .mbar{height:7px;background:var(--essay-soft);border-radius:3px;margin-top:7px;max-width:280px}
+  .mbar i{display:block;height:100%;border-radius:3px;background:var(--verdict)}
+  .mbar.e i{background:var(--line2)}
+  .numbers tr.sanity td{color:var(--dim);font-size:14px}
+  .opnotes td:first-child{font-family:var(--disp);font-weight:600;color:var(--ink);white-space:nowrap;vertical-align:top}
+  .phases{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:6px 30px;margin:18px 0 20px}
+  .phase .pt{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--verdict);margin-bottom:6px}
+  .phase ul{margin:0 0 14px;padding-left:22px}
+  .phase li{margin-bottom:6px;line-height:1.6;font-size:16px}
+  .tblnote{font-family:var(--disp);font-size:13px;color:var(--dim);margin-top:8px}
+
+  pre.code{background:var(--codebg);border:1px solid var(--line);border-radius:12px;padding:18px 20px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.65;margin:0 0 20px}
+  pre.code .k{color:var(--verdict-ink);font-weight:600}
+  pre.code .s{color:var(--good)}
+  pre.code .c{color:var(--dim);font-style:italic}
+  .codenote{font-family:var(--disp);font-size:14px;color:var(--mut);font-style:italic;margin:0 0 10px}
+  pre.code .em{display:inline-block;background:color-mix(in srgb,var(--verdict) 10%,transparent);border-radius:4px;margin:0 -4px;padding:0 4px}
+
+  .gotchas{margin:16px 0 20px;padding-left:26px}
+  .gotchas li{margin-bottom:10px;line-height:1.65}
+  .gotchas li b{color:var(--ink)}
+
+  .reflist{list-style:none;margin:0 0 20px;padding:0}
+  .reflist li{margin-bottom:20px;line-height:1.5}
+  .reflist .rh{margin-bottom:5px}
+  .reflist .pv{font-family:var(--mono);font-size:12px;color:var(--ink);font-weight:700;margin-right:8px}
+  .reflist .sep{color:var(--dim);margin:0 8px}
+  .reflist .rd{font-size:15.5px;color:var(--mut);line-height:1.55;max-width:62ch}
+  .reflist .rd code{font-size:.82em}
+
+  footer{border-top:1px solid var(--line);margin-top:30px;padding:26px 0 70px;font-family:var(--mono);font-size:12px;color:var(--dim);line-height:1.8}
+  .srlonly{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+  .ic{width:13px;height:13px;fill:currentColor;vertical-align:-2px;margin-right:5px;flex:none}
+  .pf{opacity:.65;margin-right:5px}
+  .commitline{position:absolute;top:-6px;bottom:0;width:0;border-left:2px dashed var(--verdict);opacity:.55;pointer-events:none}
+  .tl2 .bline{position:absolute;left:48.9%;top:-8px;height:52px;width:0;border-left:2.5px dashed var(--verdict);opacity:.6}
+  .cmp{display:flex;gap:38px;flex-wrap:wrap;justify-content:center;margin:32px 0 26px;text-align:center}
+  .cmp .cl2{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin-bottom:4px}
+  .cmp .cn{font-family:var(--disp);font-weight:700;font-size:32px;color:var(--verdict-ink);font-variant-numeric:tabular-nums}
+  .cmp .cn i{font-style:normal;color:var(--dim);font-weight:400;margin:0 5px}
+</style>
+
+<style>
+  .sitebar{max-width:720px;margin:0 auto;padding:22px 22px 0}
+  .sitebar a{font-family:var(--mono);font-size:12.5px;letter-spacing:.02em;color:var(--mut);text-decoration:none}
+  .sitebar a:hover{color:var(--verdict-ink)}
+</style>
+
+</head>
+<body>
+<div class="sitebar"><a href="./">← Nick Turusin</a></div>
+<header class="hero wrap">
+  <h1 class="srlonly">Act on the Verdict. Stream the Rest.</h1>
+  <img class="coverimg" width="1440" height="960" alt="Act on the Verdict. Stream the Rest. How we cut LLM time-to-act by putting the decision fields first. A white car waits at a barrier gate whose light is green and whose boom is already lifting, while the second line of the title dissolves rightward into a stream of dots." src="assets/cover.jpg">
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <div class="tt">Contents</div>
+  <div class="tp">Part I · Diagnose</div>
+  <a href="#two-audiences">A response has two audiences</a>
+  <a class="fg" href="#fig1">fig 1 · How the commit point moved</a>
+  <div class="tp">Part II · Prove</div>
+  <a href="#streaming">A stream is not a sequence of values</a>
+  <a href="#presence">Presence is not finality</a>
+  <a href="#schedule">The schema is also a schedule</a>
+  <a class="fg" href="#fig2">fig 2 · Same response, earlier action</a>
+  <a href="#gates">Three proofs before commit</a>
+  <a class="fg" href="#fig3">fig 3 · Commit, wait, abort</a>
+  <a href="#parser">The parser</a>
+  <div class="tp">Part III · Operate</div>
+  <a href="#background">Drain and verify</a>
+  <a href="#mid-sentence">The world can change mid-sentence</a>
+  <a href="#operational">Production policy</a>
+  <a href="#measured">What we measured</a>
+  <a href="#when-not">Limits</a>
+  <a href="#checklist">The implementation checklist</a>
+  <a href="#try-it">Try it on your stack</a>
+</nav>
+<article>
+<div class="wrap">
+
+  <details class="tocm">
+    <summary>Contents</summary>
+    <a href="#two-audiences">Two audiences</a>
+    <a href="#streaming">A stream is not values</a>
+    <a href="#presence">Presence is not finality</a>
+    <a href="#schedule">Schema is a schedule</a>
+    <a href="#gates">Three proofs</a>
+    <a href="#parser">The parser</a>
+    <a href="#background">Drain and verify</a>
+    <a href="#mid-sentence">Mid-sentence changes</a>
+    <a href="#operational">Production policy</a>
+    <a href="#measured">What we measured</a>
+    <a href="#when-not">Limits</a>
+    <a href="#checklist">Checklist</a>
+    <a href="#try-it">Try it</a>
+  </details>
+
+  <p style="margin-top:30px">A structured LLM response can become useful before it becomes complete.</p>
+  <p>In our transaction classifier, the category and confidence score arrived in roughly the first thirty output tokens. That was enough for the application to act. The next three hundred or so tokens were explanations, citations, and internal notes intended for humans.</p>
+  <p>Yet we had been treating the entire JSON object as one atomic result.</p>
+  <p>Once we put the decision fields first and acted as soon as they became structurally final, median time-to-act fell from 1.33 seconds to 0.65. The explanation continued in the background.</p>
+  <p>That response shape had not been designed in one sitting. It had accumulated one reasonable product request at a time.</p>
+  <p>At first, the classifier had one job: look at a bank transaction and return a category. Coffee in, <code>04_meals</code> out. The response was tiny, the interface felt immediate, and for about a month everybody was happy.</p>
+  <p>Then product did what product does.</p>
+  <p>The app needed to explain the category, because a label that appears from nowhere does not inspire much confidence. We added a customer-friendly explanation for the detail screen a user might open later.</p>
+  <p>Our internal accountants wanted a more technical explanation and a citation to the relevant accounting guidance, so they could review a classification when something looked wrong. Finally, we added confidence to route uncertain transactions into a review queue.</p>
+  <p>Our tidy classifier had become a small essayist.</p>
+  <p>Every field had a legitimate audience. They simply did not have the same deadline. Category determined what the application did now; confidence affected immediate routing. The explanations and citation belonged to screens and investigations that happened later.</p>
+  <p>None of those additions seemed large enough to justify redesigning the request path. Together, however, they made the application wait for every audience at once and pushed the moment of action all the way to the closing brace.</p>
+  <p>The obvious remedies all looked expensive. We could split the work into two model calls, but then the second call might explain a different verdict from the one we had already committed. It would also repay per-call overhead, consume more rate-limit capacity, and complicate failure handling.</p>
+  <p>The eventual fix did not require a second model call or a shorter response. It required a different way of reading the response we already had.</p>
+
+  <div class="part"><div class="pn">Part I · Diagnose</div><div class="pq">Why are we waiting?</div></div>
+
+  <h2 id="two-audiences">A response has two audiences</h2>
+  <p>Most structured LLM responses serve two audiences. The application needs a short decision now. A human may need supporting prose later — an explanation, a citation, an audit note. Call them the <b>verdict</b> and the <b>essay</b>.</p>
+  <p>Requirements expand the essay far faster than the verdict. A classifier starts with a single decision field and accumulates prose around it, while the decision itself barely changes.</p>
+</div>
+
+<div class="wide">
+  <figure class="fig quiet" id="fig1">
+    <div class="fighead"><div class="fn">Figure 1</div><div class="ft">How product requests moved the commit point</div></div>
+    <div class="f1" role="img" aria-label="Four cumulative bars, one per version of the schema. In v1 the whole response is a single purple category field, and the earliest safe commit sits just after it. v2 appends a grey customer explanation; v3 appends a grey internal explanation and citation. Through all three versions the commit marker stays at the left, just after category. In v4 a second purple field, confidence, is appended at the very end, and the commit marker jumps to the far right, past the entire essay.">
+      <div class="f1legend">
+        <span><span class="sw v"></span>fields needed now</span>
+        <span><span class="sw e"></span>fields needed later</span>
+        <span><span class="dot">&#9679;</span>earliest safe commit</span>
+      </div>
+      <div class="f1row"><span class="f1v">v1</span><div class="f1track">
+        <div class="f1bar"><div class="f1seg v" style="width:10.53%">category</div></div>
+        <div class="f1commit" style="left:10.53%"></div>
+      </div></div>
+      <div class="f1row"><span class="f1v">v2</span><div class="f1track">
+        <div class="f1bar"><div class="f1seg v" style="width:10.53%">category</div><div class="f1seg e" style="width:31.58%">customer explanation</div></div>
+        <div class="f1commit" style="left:10.53%"></div>
+      </div></div>
+      <div class="f1row"><span class="f1v">v3</span><div class="f1track">
+        <div class="f1bar"><div class="f1seg v" style="width:10.53%">category</div><div class="f1seg e" style="width:31.58%">customer explanation</div><div class="f1seg e" style="width:31.58%">internal explanation</div><div class="f1seg e" style="width:15.79%">citation</div></div>
+        <div class="f1commit" style="left:10.53%"></div>
+      </div></div>
+      <div class="f1row"><span class="f1v">v4</span><div class="f1track">
+        <div class="f1bar"><div class="f1seg v" style="width:10.53%">category</div><div class="f1seg e" style="width:31.58%">customer explanation</div><div class="f1seg e" style="width:31.58%">internal explanation</div><div class="f1seg e" style="width:15.79%">citation</div><div class="f1seg v" style="width:10.53%">confidence</div></div>
+        <div class="f1commit" style="left:100%"></div>
+      </div></div>
+      <div class="f1annorow"><span class="f1v"></span><div class="f1anno">confidence &mdash; the newest verdict field, appended last&nbsp;<span class="ar">&#8593;</span></div></div>
+    </div>
+    <figcaption><b>The schema reflected the order of requests, not the order of urgency.</b> The essay grew gradually; the commit point moved only when <code>confidence</code>, the second field needed immediately, was appended after it.</figcaption>
+  </figure>
+</div>
+
+<div class="wrap">
+  <p>The response was already arriving one token at a time. We had simply decided that none of those tokens counted until the last one appeared.</p>
+  <p>We had been treating the closing brace as if it marked the moment the model had finished <i>deciding</i>. It did not. It marked the moment the model had finished <i>explaining itself</i>.</p>
+  <p>That distinction is the entire technique.</p>
+  <p class="aside"><b>Scope note.</b> Reordering an autoregressive output may affect the model's final choice, so accuracy must be benchmarked separately. Early reading cannot alter tokens already emitted; in our schema, the later prose explained the verdict rather than deriving it.</p>
+
+  <div class="part"><div class="pn">Part II · Prove</div><div class="pq">When is the verdict final?</div></div>
+
+  <h2 id="streaming">A stream is not a sequence of values</h2>
+  <p>Streaming is usually treated as a UI feature: humans are comfortable reading half a sentence, so tokens appear as they are generated and perceived latency improves. Machines are less accommodating. Half a JSON document is not JSON: there is no closing brace, strings may be unfinished, and a conventional parser is correct to reject every incomplete prefix.</p>
+  <p>A streamed response arrives as a sequence of frames, each carrying a delta: the next fragment of generated text. The boundaries are arbitrary. A frame may end inside a quoted string, after the first digit of a number, or immediately before the comma that proves a value is complete. No business logic should assign meaning to an individual frame; the only meaningful object is the accumulated buffer.</p>
+  <p>Structured output changes what can be inferred from that buffer. When a provider enforces the schema during decoding, the model is no longer free to produce arbitrary text. That is a useful foundation, but it does not, by itself, make an early commit safe. The difficult part is knowing when a field is <i>finished</i>.</p>
+
+  <h2 id="presence">Presence is not finality</h2>
+  <p>Partial-JSON parsers can inspect an incomplete buffer and report that a field appears to be present.</p>
+  <p>That is useful for rendering interfaces. It is not necessarily sufficient for committing a decision.</p>
+  <p class="codenote">Consider this prefix:</p>
+  <pre class="code" aria-label="A JSON prefix ending at confidence colon eight">{
+  <span class="k">"category"</span>: <span class="s">"04_meals"</span>,
+  <span class="k">"confidence"</span>: 8</pre>
+  <p>A parser may already be able to identify confidence.</p>
+  <p>But is its value 8?</p>
+  <p class="codenote">The next frame may contain:</p>
+  <pre class="code" aria-label="The next frame: seven comma">7,</pre>
+  <p>The final value was 87.</p>
+  <p>Rendering an 8 for a fraction of a second is harmless. Writing it to a database, routing a transaction, or triggering an external action is not.</p>
+  <p>For a JSON string, that evidence is the closing quote. For a number, it is a valid terminator: a comma, closing brace, or whitespace that ends the JSON number.</p>
+
+  <p><b>A partial parse that can disagree with the final parse is not a parse. It is a guess.</b></p>
+
+  <p>This is why early commit is not simply "parse whatever fields have arrived." It is an attempt to construct an <b>immutable prefix</b>: a portion of the response whose meaning is already final even though the complete document is not.</p>
+
+  <h2 id="schedule">The schema is also a schedule</h2>
+  <p>The first implementation step was almost disappointingly simple: we placed the verdict fields first.</p>
+  <p>Until then, the fields had sat in the order they were added, which put confidence, the newest arrival, at the very end. Nobody had chosen that order. It was the order the requirements arrived in.</p>
+  <p class="codenote">A simplified version of the schema looked like this:</p>
+  <pre class="code" aria-label="JSON schema with verdict fields ordered first, condensed">{
+  <span class="k">"type"</span>: <span class="s">"object"</span>,
+  <span class="k">"additionalProperties"</span>: false,
+  <span class="k">"properties"</span>: {
+    <span class="k">"category"</span>:   { <span class="k">"type"</span>: <span class="s">"string"</span>, <span class="k">"enum"</span>: [<span class="s">"01_income_employment"</span>, <span class="s">"..."</span>, <span class="s">"08_personal"</span>] },
+    <span class="k">"confidence"</span>: { <span class="k">"type"</span>: <span class="s">"number"</span>, <span class="k">"minimum"</span>: 0, <span class="k">"maximum"</span>: 100 },
+    <span class="k">"customer_friendly_explanation"</span>: { <span class="k">"type"</span>: <span class="s">"string"</span> },
+    <span class="k">"internal_explanation"</span>: { <span class="k">"type"</span>: <span class="s">"string"</span> },
+    <span class="k">"citation"</span>: { <span class="k">"type"</span>: <span class="s">"string"</span> }
+  }
+}</pre>
+  <p class="aside">The exact way field order is expressed varies by provider: some expose an explicit ordering property, others follow the order of properties in the schema. Strict modes typically also require every property to appear in <code>required</code>, and commonly reject schemas that allow additional properties. Either way, test it against the specific model and API path you use in production.</p>
+  <p>Most engineers first encounter a schema as a validation contract: the completed response must have this shape.</p>
+  <p>During constrained generation, it serves another purpose. It influences what the decoder is allowed to produce next.</p>
+
+  <div class="pull">The schema is not only a contract. It is a <span class="m">schedule</span>.</div>
+
+  <p>The last verdict field defines the earliest possible commit point.</p>
+</div>
+
+<div class="wide">
+  <figure class="fig sheet" id="fig2">
+    <div class="fighead"><div class="fn">Figure 2</div><div class="ft">Same response, earlier action</div></div>
+    <div class="schemapair" role="img" aria-label="Two token bars of equal length. In schema A the fields sit in the order they were added: a small indigo category segment first, striped essay in the middle, a small indigo confidence segment last, and the commit flag points at the closing brace. In schema B both verdict fields sit first and the commit flag points at token 30.">
+      <div class="schemabar">
+        <div class="sl">schema a · the order the fields were added</div>
+        <div class="barwrap">
+          <div class="commitflag atright"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.7 1 3.2 9.3h3.6L6 15l6.8-8.6H9.1z"/></svg>commit · the closing brace</div>
+          <div class="commitline" style="right:0"></div>
+          <div class="bar">
+            <div class="seg v" style="width:5%"></div>
+            <div class="seg e" style="width:90%"></div>
+            <div class="seg v" style="width:5%"></div>
+          </div>
+          <div class="segkey">
+            <span class="kv" style="left:0">category</span>
+            <span class="ke" style="left:50%">¶ essay</span>
+            <span class="kv" style="right:0">confidence</span>
+          </div>
+        </div>
+      </div>
+      <div class="schemabar">
+        <div class="sl">schema b · verdict first</div>
+        <div class="barwrap">
+          <div class="commitflag atleft"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.7 1 3.2 9.3h3.6L6 15l6.8-8.6H9.1z"/></svg>commit · token ~30</div>
+          <div class="commitline" style="left:10%"></div>
+          <div class="bar">
+            <div class="seg v" style="width:10%"></div>
+            <div class="seg e" style="width:90%"></div>
+          </div>
+          <div class="segkey">
+            <span class="kv" style="left:0">category · confidence</span>
+            <span class="ke" style="left:55%">¶ essay</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="cmp">
+      <div><span class="cl2">tokens before action</span><span class="cn">~330 <i>→</i> ~30</span></div>
+      <div><span class="cl2">median time-to-act</span><span class="cn">1.33s <i>→</i> 0.65s</span></div>
+    </div>
+    <div class="tl2" style="margin-top:14px" role="img" aria-label="A timeline from zero to 1.33 seconds split at 0.65 seconds: the request path before the verdict, the shaded background drain after it. Provisional category marked at 0.3 seconds.">
+      <div class="bline"></div>
+      <div class="track">
+        <div class="zreq">request path</div>
+        <div class="zbg"><span class="pf">¶</span>off the request path</div>
+      </div>
+      <div class="mark m0">0s</div>
+      <div class="mark" style="left:22.6%">0.3s</div>
+      <div class="mark hot" style="left:48.9%">0.65s</div>
+      <div class="mark mend">1.33s</div>
+    </div>
+    <figcaption><b>Same fields, same tokens; only the commit point moved.</b></figcaption>
+  </figure>
+</div>
+
+<div class="wrap">
+  <p>Nothing generates faster; the useful tokens simply arrive earlier.</p>
+  <p class="aside"><b>Provider requirement.</b> The API must enforce the schema during generation and preserve field order while streaming. Verify both on the exact model and API path you use. And note: streamed tool-call arguments often expose the same partial-JSON shape.</p>
+
+  <h2 id="gates">Three proofs before commit</h2>
+  <p>We wanted the early path to be conservative.</p>
+  <p>A missing early verdict was acceptable. The system could fall back to waiting for the complete response or use a deterministic default.</p>
+  <p>A wrongly parsed verdict was not acceptable.</p>
+  <p>The parser therefore demands three proofs.</p>
+
+  <h3>Proof 1: The value is complete</h3>
+  <p>For category, the parser waits for the closing quote.</p>
+  <p>For confidence, it waits for a valid JSON terminator.</p>
+  <p class="codenote">The fragment below is not enough:</p>
+  <pre class="code" aria-label="confidence colon eight, no terminator">"confidence": 8</pre>
+  <p class="codenote">This one is:</p>
+  <pre class="code" aria-label="confidence colon eight comma">"confidence": 8,</pre>
+  <p>The comma proves that the number has ended.</p>
+
+  <h3>Proof 2: The value belongs to the closed set</h3>
+  <p>A syntactically valid string is not necessarily a valid category.</p>
+  <p>The parser checks the extracted value against the same enumeration used in the schema.</p>
+  <p>This matters even when constrained decoding is enabled. It gives the application its own explicit invariant rather than delegating all trust to the provider.</p>
+  <p>It also protects against prefix ambiguity.</p>
+  <p class="codenote">Suppose both of these values exist:</p>
+  <pre class="code" aria-label="Two enum values sharing a prefix">04_meals
+04_meals_entertainment</pre>
+  <p>Seeing the characters <code>04_meals</code> is not enough. Seeing a closing quote and confirming membership in the allowed set is.</p>
+
+  <h3>Proof 3: The order is intact</h3>
+  <p>If an explanation field appears before the verdict is complete, the provider or model has violated the ordering contract.</p>
+  <p>We do not try to recover creatively.</p>
+  <p>We abort the early path and return to the deterministic pipeline.</p>
+  <p>A missing prediction is recoverable. A confidently misparsed one is not.</p>
+
+</div>
+
+<div class="wide">
+  <figure class="fig quiet" id="fig3">
+    <div class="fighead"><div class="fn">Figure 3</div><div class="ft">Commit, wait, abort</div></div>
+    <div class="tri" role="img" aria-label="Three buffers with their structural evidence and outcome. A complete verdict with its terminator commits. A number without a terminator waits. An essay field arriving before the verdict aborts.">
+      <div class="srow c"><span class="buf">{"category": "04_meals", "confidence": 87<span class="hv">,</span></span><span class="ev">terminator present</span><span class="out">COMMIT</span></div>
+      <div class="srow w"><span class="buf">{"category": "04_meals", "confidence": <span class="hw">8</span></span><span class="ev">may still become 87</span><span class="out">WAIT</span></div>
+      <div class="srow a"><span class="buf">{"<span class="hb">customer_friendly_explanation</span>": "This tr</span><span class="ev">verdict did not arrive first</span><span class="out">ABORT</span></div>
+    </div>
+    <figcaption><b>Three buffers, three structural outcomes.</b> The next frame may append <code>7,</code> and the final value becomes <code>87</code>; that is why the middle buffer waits.</figcaption>
+  </figure>
+</div>
+
+<div class="wrap">
+  <h2 id="parser">The parser</h2>
+  <p class="codenote">The decision path, condensed to what matters:</p>
+  <pre class="code" aria-label="Python decision parser, condensed">DECISION_RE = re.compile(
+    <span class="s">r'"category"\s*:\s*"(?P&lt;category&gt;[A-Za-z0-9_]+)"\s*,\s*'</span>
+    <span class="s">r'"confidence"\s*:\s*(?P&lt;confidence&gt;\d+(?:\.\d+)?)'</span>
+    <span class="em"><span class="s">r'\s*[,}\s]'</span></span>   <span class="c"># ← check 1: terminator required</span>
+)
+
+<span class="k">class</span> DecisionParser:
+    <span class="k">def</span> __init__(self) -&gt; None:
+        self.buffer = <span class="s">""</span>
+
+    <span class="k">def</span> feed(self, chunk: str) -&gt; Optional[Decision]:
+        self.buffer += chunk
+        match = DECISION_RE.search(self.buffer)
+        <span class="k">if</span> match:
+            category = match.group(<span class="s">"category"</span>)
+            <span class="em"><span class="k">if</span> category <span class="k">not in</span> CATEGORY_ENUM:</span>          <span class="c"># ← check 2: membership</span>
+                <span class="k">raise</span> AbortEarlyCommit(category)
+            confidence = float(match.group(<span class="s">"confidence"</span>))
+            <span class="k">if not</span> 0 &lt;= confidence &lt;= 100:
+                <span class="k">raise</span> AbortEarlyCommit(confidence)
+            <span class="k">return</span> Decision(category, confidence)
+        <span class="c"># order check only after the match attempt: one chunk may hold</span>
+        <span class="c"># the end of the verdict and the start of the essay</span>
+        <span class="em"><span class="k">if</span> any(m <span class="k">in</span> self.buffer <span class="k">for</span> m <span class="k">in</span> ESSAY_MARKERS):</span>  <span class="c"># ← check 3: order</span>
+            <span class="k">raise</span> AbortEarlyCommit(<span class="s">"essay before verdict"</span>)
+        <span class="k">return</span> <span class="k">None</span></pre>
+  <p class="aside">The full listing, with the imports, the enum set, and the frozen dataclass, runs to about sixty lines and ships alongside the published article. The three highlighted checks are the whole idea.</p>
+  <p>The order inside <code>feed</code> matters.</p>
+  <p>A single frame may contain the end of confidence and the beginning of the first explanation. If we checked for essay fields first, we could reject a perfectly valid stream.</p>
+  <p>The parser therefore tries to prove that the verdict is complete before checking whether anything arrived out of order.</p>
+  <p>It also parses the accumulated buffer, never the latest chunk. Chunk boundaries are transport details, not syntax.</p>
+</div>
+
+
+<div class="wrap">
+  <p>At this point, the decision is locally final even though the response is globally incomplete.</p>
+
+  <div class="part"><div class="pn">Part III · Operate</div><div class="pq">What happens after we act?</div></div>
+
+  <p>At 0.65 seconds, the verdict replaced the deterministic provisional category already on screen. The response ran on to 1.33 seconds, but that remaining work no longer blocked the user. This is why we measure time-to-act, not merely time-to-complete.</p>
+
+  <h2 id="background">Drain and verify</h2>
+  <p>Committing early does not require abandoning the response.</p>
+  <p>After the verdict lands, the open stream is handed to a bounded background reader. That reader:</p>
+  <ol class="plain">
+    <li>drains the remaining frames;</li>
+    <li>assembles the complete JSON;</li>
+    <li>validates it against the schema;</li>
+    <li>confirms that the final verdict matches the early verdict;</li>
+    <li>stores the explanations and citation.</li>
+  </ol>
+  <p>The background reader does not create the guarantee; Part II's structural proofs do. Its job is to verify that the completed object preserves the verdict already committed.</p>
+  <p>The completed object still gives us a second line of defence. If a provider update ever violates the invariant, the background reader is where the mismatch becomes visible.</p>
+
+  <h2 id="mid-sentence">The world can change mid-sentence</h2>
+  <p>There is another race that does not occur inside the JSON stream. The application keeps changing while the stream is open: a human may replace the model's verdict before the explanation finishes.</p>
+</div>
+
+<div class="wrap">
+  <div class="orace" role="img" aria-label="Four timestamped events: at 0.65 seconds the model commits meals. At 0.90 a human changes it to personal. At 1.33 the explanation finishes. At 1.34 the stale explanation is discarded.">
+    <div class="r mod"><span class="t">0.65s</span><span class="w">model</span><span><b style="color:var(--verdict-ink)">04_meals</b> committed; the user sees it</span></div>
+    <div class="r hum"><span class="t">0.90s</span><span class="w">human</span><span>changed to <b style="color:var(--good)">08_personal</b>; humans outrank models, permanently</span></div>
+    <div class="r"><span class="t">1.33s</span><span class="w">background</span><span>explanation finishes; the reader re-checks the live decision</span></div>
+    <div class="r"><span class="t">1.34s</span><span class="w">system</span><span><span class="strike">"We categorised this as Meals because…"</span> discarded, nothing stored</span></div>
+  </div>
+</div>
+
+<div class="wrap">
+  <p>Before storing the essay, the background reader re-checks ownership of the live decision. If a human has overruled the model, the explanation is discarded.</p>
+  <p><b>Never attach model prose to a decision the model no longer owns.</b></p>
+  <p>If the stream fails during the background drain, the verdict remains valid. The explanation slot stays empty. The user does not lose the category they already received.</p>
+
+  <h2 id="operational">Production policy</h2>
+  <p>The parser may be small, but it sits inside a less glamorous collection of deadlines, cancellation rules, connection limits, and fallbacks.</p>
+  <p>Those details determine whether the optimization survives production.</p>
+
+  <table class="numbers opnotes">
+    <caption class="srlonly">Production notes: risks and the policies that answer them</caption>
+    <thead><tr><th>Risk</th><th>Policy</th></tr></thead>
+    <tbody>
+      <tr><td>Slow verdict</td><td>Hard 2-second deadline to the verdict; on expiry the deterministic pipeline answers. Worst observed: 0.91s.</td></tr>
+      <tr><td>Caller disconnects</td><td>Cancel the upstream generation before the commit. After it, the drain is expected to outlive the request.</td></tr>
+      <tr><td>Retry temptation</td><td>Never retry a live stream: a retry is a second generation, a second bill, and a race between two commits.</td></tr>
+      <tr><td>Proxy buffering</td><td>Any middle layer can quietly batch the stream and everything still "works", just late. Test incrementality end to end.</td></tr>
+      <tr><td>Connection pressure</td><td>Bound the background drains (we ran 64) and size connection pools for full-response lifetime, not verdict time.</td></tr>
+      <tr><td>Deploys</td><td>Cancelling in-flight drains is a product decision, not a side effect: the verdict stays, only essays are lost.</td></tr>
+      <tr><td>Missing usage data</td><td>Token accounting often rides the final frame; close a stream early and the cost dashboard undercounts politely.</td></tr>
+      <tr><td>Cost pressure</td><td>Closing the stream immediately after the verdict saves output tokens, but forfeits the essay: a separate optimization with different product semantics.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="measured">What we measured</h2>
+  <p>We benchmarked the design on the actual schema and prompt before writing production code.</p>
+
+  <table class="numbers">
+    <caption class="srlonly">Measured latencies over roughly 300 live calls</caption>
+    <thead><tr><th>Metric</th><th>median</th><th>worst observed</th></tr></thead>
+    <tbody>
+      <tr><td>Time to <b>early verdict</b><div class="mbar" aria-hidden="true"><i style="width:49%"></i></div></td><td class="big">0.65s</td><td>0.91s</td></tr>
+      <tr><td>Time to <b>complete response</b><div class="mbar e" aria-hidden="true"><i style="width:100%"></i></div></td><td class="big">1.33s</td><td>1.79s</td></tr>
+      <tr class="sanity"><td>Early parse disagreed with final JSON</td><td>0</td><td>—</td></tr>
+      <tr class="sanity"><td>Out-of-order aborts</td><td>0</td><td>—</td></tr>
+    </tbody>
+  </table>
+  <p class="tblnote">The real guarantee is the structure (quote, terminator, membership), not the tally.</p>
+
+  <p>The median time-to-act fell by approximately half. That ratio will not transfer directly to another application.</p>
+  <p>A fixed time-to-first-token cost sits in front of the output. The larger the essay relative to the verdict, the more latency can be removed from the critical path.</p>
+  <p>If the complete response already fits comfortably inside the application's latency budget, there may be nothing worth optimizing.</p>
+  <p>Measure the real payload. Published model latency says little about the position of the fields your own system needs.</p>
+
+
+  <h2 id="when-not">Limits</h2>
+  <p>Early commit works when the critical fields can be made structurally final. Three situations disqualify it:</p>
+  <ul class="gotchas">
+    <li><b>The verdict cannot be made self-contained and structurally final.</b> Free-form decisions have no safe early boundary, and a verdict that needs later fields to interpret it is not a verdict.</li>
+    <li><b>The provider cannot give you constrained, ordered streaming.</b> Then there is nothing to commit early on, and the safe failure mode is waiting for the complete response.</li>
+    <li><b>There is no deterministic fallback, or the full response already meets the latency target.</b> Early commit assumes the model is optional, and the extra concurrency, parsing, and lifecycle management are not free.</li>
+  </ul>
+
+  <h2 id="checklist">The implementation checklist</h2>
+  <div class="phases">
+    <div class="phase"><div class="pt">Design</div><ul>
+      <li>Separate fields into a verdict and an essay.</li>
+      <li>Put the verdict first in the schema.</li>
+      <li>Verify empirically that the provider preserves the order.</li>
+      <li>Constrain the committed value to a closed set whenever possible.</li>
+    </ul></div>
+    <div class="phase"><div class="pt">Parse</div><ul>
+      <li>Parse the accumulated buffer, never individual frames.</li>
+      <li>Require a closing quote or valid JSON terminator.</li>
+      <li>Re-check enum membership inside the application.</li>
+      <li>Abort if later fields arrive before the verdict is complete.</li>
+    </ul></div>
+    <div class="phase"><div class="pt">Validate</div><ul>
+      <li>Compare the early verdict with the final object.</li>
+      <li>Re-check live application state before storing explanations.</li>
+    </ul></div>
+    <div class="phase"><div class="pt">Operate</div><ul>
+      <li>Drain the remainder in a bounded background worker.</li>
+      <li>Set a hard verdict deadline and fall back deterministically.</li>
+      <li>Avoid retries after streaming begins.</li>
+      <li>Test incrementality through the full network stack.</li>
+    </ul></div>
+  </div>
+
+  <p>A structured LLM response does not have to become globally complete before part of it becomes locally final.</p>
+  <p>Once the decision is irreversible, the system can move.</p>
+
+  <p>The essay can finish its sentence.</p>
+
+  <h2 id="try-it">Try it on your stack</h2>
+  <p>Put a closed-set decision first and a long explanation last. Stream the response, record when the decision becomes structurally final, and compare that with the full-response time.</p>
+  <p>Official documentation:</p>
+  <ul class="reflist">
+    <li>
+      <div class="rh"><span class="pv">OpenAI</span><a href="https://developers.openai.com/api/docs/guides/structured-outputs" target="_blank" rel="noopener">Structured Outputs</a><span class="sep">·</span><a href="https://developers.openai.com/api/docs/guides/streaming-responses" target="_blank" rel="noopener">Streaming Responses</a></div>
+      <div class="rd">Structured Outputs can be processed while model responses or function-call arguments are still being generated. OpenAI also documents that Structured Outputs preserve the order of keys in the schema.</div>
+    </li>
+    <li>
+      <div class="rh"><span class="pv">Anthropic</span><a href="https://platform.claude.com/docs/en/build-with-claude/structured-outputs" target="_blank" rel="noopener">Structured Outputs</a><span class="sep">·</span><a href="https://platform.claude.com/docs/en/build-with-claude/streaming" target="_blank" rel="noopener">Streaming Messages</a></div>
+      <div class="rd">Claude's Structured Outputs use constrained decoding and can be streamed like ordinary responses. Object properties retain their defined order, with required properties emitted before optional ones.</div>
+    </li>
+    <li>
+      <div class="rh"><span class="pv">Google Gemini</span><a href="https://ai.google.dev/gemini-api/docs/structured-output" target="_blank" rel="noopener">Structured Outputs</a></div>
+      <div class="rd">Gemini can stream Structured Outputs as partial JSON strings that concatenate into the final object. Its <code>generateContent</code> documentation also states that fields are produced in schema-key order.</div>
+    </li>
+    <li>
+      <div class="rh"><span class="pv">Amazon Bedrock</span><a href="https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html" target="_blank" rel="noopener">Structured Outputs</a></div>
+      <div class="rd">Bedrock exposes Structured Outputs through streaming paths including <code>ConverseStream</code> and <code>InvokeModelWithResponseStream</code> for supported models.</div>
+    </li>
+    <li>
+      <div class="rh"><span class="pv">vLLM</span><a href="https://docs.vllm.ai/en/latest/features/structured_outputs/" target="_blank" rel="noopener">Structured Outputs</a></div>
+      <div class="rd">For self-hosted models, vLLM supports schema-, grammar-, regex-, and choice-constrained output, including streaming through its OpenAI-compatible server.</div>
+    </li>
+  </ul>
+  <p>Verify schema enforcement, field ordering, and chunk behavior on the exact model and API path you plan to ship.</p>
+</div>
+</article>
+
+<script>
+(function(){
+  document.addEventListener('click', function(e){
+    var a = e.target && e.target.closest ? e.target.closest('a[href^="#"]') : null;
+    if(!a) return;
+    var id = decodeURIComponent(a.getAttribute('href').slice(1));
+    if(!id) return;
+    var el = document.getElementById(id);
+    if(!el) return;
+    e.preventDefault();
+    el.scrollIntoView({behavior:'smooth', block:'start'});
+  });
+})();
+</script>
+</body>
+</html>
