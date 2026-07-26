@@ -224,7 +224,7 @@ class DecisionParser:
         return None
 ```
 
-> The three checks marked above are the whole idea. The full listing — imports, the enum set, the frozen dataclass — plus a test suite covering the cases in this article and a script that replays a synthetic stream, is here: [github.com/nturusin/llm-streaming-early-commit](https://github.com/nturusin/llm-streaming-early-commit). It has no dependencies beyond the standard library.
+> The three checks marked above are the whole idea. The full listing — imports, the enum set, the frozen dataclass — and a test suite covering the cases in this article are here: [github.com/nturusin/llm-streaming-early-commit](https://github.com/nturusin/llm-streaming-early-commit). No dependencies beyond the standard library.
 
 The order inside `feed` matters.
 
@@ -368,11 +368,11 @@ The essay can finish its sentence.
 
 Put a closed-set decision first and a long explanation last. Stream the response, record when the decision becomes structurally final, and compare that with the full-response time.
 
-The reference implementation from this article — parser, tests, and a script that replays a synthetic stream to show where the commit point lands — is at [github.com/nturusin/llm-streaming-early-commit](https://github.com/nturusin/llm-streaming-early-commit). Standard library only:
+The reference implementation from this article is at [github.com/nturusin/llm-streaming-early-commit](https://github.com/nturusin/llm-streaming-early-commit). It also ships a probe that runs the check against a real model and reports whether field order held, whether the early verdict matched the completed object, and how much came off the critical path:
 
 ```bash
-python3 test_early_commit.py   # structural tests, including the 8 -> 87 case
-python3 demo.py                # field order vs. time-to-act
+python3 test_early_commit.py                      # structural tests, including the 8 -> 87 case
+python3 probe.py --project YOUR_PROJECT --runs 20  # measure it on your own stack
 ```
 
 Official documentation:
