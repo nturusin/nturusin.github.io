@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Act on the Verdict. Stream the Rest.</title>
+<style>
+@page { size: A4; margin: 20mm 18mm; }
+* { box-sizing: border-box; }
+body {
+  font-family: Charter, Georgia, "Times New Roman", serif;
+  font-size: 11.5pt; line-height: 1.55; color: #111; background: #fff;
+  margin: 0 auto; max-width: 165mm;
+}
+header.title { margin-bottom: 26px; padding-bottom: 18px; border-bottom: 1.5px solid #111; }
+h1 { font-family: "Helvetica Neue", Arial, sans-serif; font-size: 24pt; line-height: 1.15;
+     letter-spacing: -0.01em; margin: 0 0 10px; }
+.subtitle { font-size: 13pt; color: #444; margin: 0 0 12px; line-height: 1.4; }
+.byline { font-family: "Helvetica Neue", Arial, sans-serif; font-size: 10pt; color: #666;
+          text-transform: uppercase; letter-spacing: 0.1em; margin: 0; }
+h2 { font-family: "Helvetica Neue", Arial, sans-serif; font-size: 12pt; letter-spacing: 0.12em;
+     text-transform: uppercase; color: #3730A3; margin: 30px 0 12px; padding-top: 12px;
+     border-top: 1.5px solid #111; page-break-after: avoid; }
+h3 { font-family: "Helvetica Neue", Arial, sans-serif; font-size: 14pt; margin: 22px 0 8px;
+     page-break-after: avoid; }
+p { margin: 0 0 11px; }
+ul, ol { margin: 0 0 12px; padding-left: 22px; }
+li { margin-bottom: 5px; }
+blockquote { margin: 12px 0; padding: 10px 14px; background: #F4F4EE; border-left: 3px solid #B9B9AE;
+             font-size: 10.5pt; color: #333; page-break-inside: avoid; }
+blockquote p:last-child { margin-bottom: 0; }
+code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 0.85em;
+       background: #F1F1EA; padding: 1px 4px; border-radius: 3px; }
+pre { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 8.8pt; line-height: 1.45;
+      background: #F4F4EE; border: 1px solid #E2E2D8; border-radius: 4px; padding: 10px 12px;
+      overflow-wrap: break-word; white-space: pre-wrap; margin: 0 0 12px;
+      page-break-inside: avoid; }
+pre code { background: none; padding: 0; font-size: inherit; }
+figure { margin: 16px 0; page-break-inside: avoid; }
+figure img { display: block; width: 100%; height: auto; border: 1px solid #E2E2D8; border-radius: 3px; }
+figcaption { font-family: "Helvetica Neue", Arial, sans-serif; font-size: 9pt; color: #555;
+             margin-top: 6px; line-height: 1.4; }
+table { width: 100%; border-collapse: collapse; font-size: 10pt; margin: 0 0 14px;
+        page-break-inside: avoid; }
+th { text-align: left; font-family: "Helvetica Neue", Arial, sans-serif; font-size: 8.5pt;
+     text-transform: uppercase; letter-spacing: 0.07em; color: #555;
+     border-bottom: 1.5px solid #999; padding: 6px 8px; }
+td { border-bottom: 1px solid #E2E2D8; padding: 6px 8px; vertical-align: top; }
+a { color: #3730A3; }
+</style></head>
+<body>
+<header class="title">
+  <h1>Act on the Verdict. Stream the Rest.</h1>
+  <p class="subtitle">How we cut median LLM time-to-act from 1.33s to 0.65s by putting the decision fields first</p>
+  <p class="byline">Nikolai Turusin</p>
+</header>
+<p>A structured LLM response can become useful before it becomes complete.</p>
+<p>In our transaction classifier, the category and confidence score arrived in roughly the first thirty output tokens. That was enough for the application to act. The next two hundred or so tokens were explanations, citations, and internal notes intended for humans.</p>
+<p>Yet we had been treating the entire JSON object as one atomic result.</p>
+<p>Once we put the decision fields first and acted as soon as they became structurally final, median time-to-act fell from 1.33 seconds to 0.65. The explanation continued in the background.</p>
+<p>That response shape had not been designed in one sitting. It had accumulated one reasonable product request at a time.</p>
+<p>At first, the classifier had one job: look at a bank transaction and return a category. Coffee in, <code>04_meals</code> out. The response was tiny and the interface felt immediate.</p>
+<p>Then product did what product does. The app needed to explain each category, because a label that appears from nowhere does not inspire confidence, so we added a customer-friendly explanation. Our internal accountants wanted a more technical explanation and a citation to the relevant guidance, so they could review a classification when something looked wrong. Finally we added a confidence score, to route uncertain transactions into a review queue.</p>
+<p>Every field had a legitimate audience. They simply did not have the same deadline. Category determined what the application did immediately, and confidence decided routing. The explanations and the citation belonged to screens and investigations that happened later, if at all.</p>
+<p>None of those additions seemed large enough to justify redesigning the request path. Together, however, they made the application wait for every audience at once, and pushed the moment of action all the way to the closing brace.</p>
+<p>The obvious remedies all looked expensive. We could split the work into two model calls, but then the second call might explain a different verdict from the one we had already committed. It would also repay per-call overhead, consume more rate-limit capacity, and complicate failure handling.</p>
+<p>The eventual fix did not require a second model call or a shorter response. It required a different way of reading the response we already had.</p>
+<h2>Part I · Diagnose — Why are we waiting?</h2>
+<h3>A response has two audiences</h3>
+<p>Most structured LLM responses serve two audiences. The application needs a short decision now. A human may need supporting prose later — an explanation, a citation, an audit note. Call them the <strong>verdict</strong> and the <strong>essay</strong>.</p>
+<p>A response from our classifier, lightly redacted, makes the split concrete:</p>
+<pre><code class="language-json">{
+  &quot;category&quot;: &quot;09_general_purchase&quot;,
+  &quot;confidence&quot;: 75,
+  &quot;customer_friendly_explanation&quot;: &quot;This purchase has been categorised as a general business purchase. If it was for stock, office equipment, or personal use, you can update the category.&quot;,
+  &quot;internal_explanation&quot;: &quot;The description denotes a payment to a general online marketplace. No invoice or line-item detail is attached and the amount is small, so the safest default for an ambiguous generic merchant is a general business purchase.&quot;,
+  &quot;citation&quot;: &quot;Internal bookkeeping guidance, general business purchase.&quot;
+}</code></pre>
+<p>The first two fields are the verdict: <code>category</code> is written to the transaction, <code>confidence</code> decides whether it enters a review queue. Everything after them is the essay. It is not filler — an accountant reviewing a questionable classification needs it — but nothing in the request path is waiting on it.</p>
+<p>Requirements expand the essay far faster than the verdict. A classifier starts with a single decision field and accumulates prose around it, while the decision itself barely changes.</p>
+<figure><img src="figures/fig1.png" alt="Four cumulative bars, one per version of the schema. In v1 the whole response is a single purple category field, and the earliest safe commit sits just after it. v2 appends a grey customer explanation; v3 appends a grey internal explanation and citation. Through all three versions the commit marker stays at the left, just after category. In v4 a second purple field, confidence, is appended at the very end, and the commit marker jumps to the far right, past the entire essay."><figcaption>Figure 1 — How product requests moved the commit point. <strong>The schema reflected the order of requests, not the order of urgency.</strong> The essay grew gradually; the commit point moved only when <code>confidence</code>, the second field needed immediately, was appended after it.</figcaption></figure>
+<p>The response was already arriving one token at a time. We had simply decided that none of those tokens counted until the last one appeared.</p>
+<p>We had been treating the closing brace as if it marked the moment the model had finished <em>deciding</em>. It did not. It marked the moment the model had finished <em>explaining itself</em>.</p>
+<p>That distinction is the entire technique.</p>
+<blockquote><p><strong>Scope note.</strong> Reordering an autoregressive output may affect the model&#x27;s final choice, so accuracy must be benchmarked separately. Early reading cannot alter tokens already emitted; in our schema, the later prose explained the verdict rather than deriving it.</p></blockquote>
+<h2>Part II · Prove — When is the verdict final?</h2>
+<h3>A stream is not a sequence of values</h3>
+<p>Streaming is usually treated as a UI feature: humans are comfortable reading half a sentence, so tokens appear as they are generated and perceived latency improves. Machines are less accommodating. Half a JSON document is not JSON: there is no closing brace, strings may be unfinished, and a conventional parser is correct to reject every incomplete prefix.</p>
+<p>A streamed response arrives as a sequence of frames, each carrying a delta: the next fragment of generated text. The boundaries are arbitrary. A frame may end inside a quoted string, after the first digit of a number, or immediately before the comma that proves a value is complete. No business logic should assign meaning to an individual frame; the only meaningful object is the accumulated buffer.</p>
+<p>Structured output changes what can be inferred from that buffer. When a provider enforces the schema during decoding, the model is no longer free to produce arbitrary text. That is a useful foundation, but it does not, by itself, make an early commit safe. The difficult part is knowing when a field is <em>finished</em>.</p>
+<h3>Presence is not finality</h3>
+<p>A partial-JSON parser may tell you that a field has appeared in the buffer. That does not mean its value is complete.</p>
+<p><em>Consider:</em></p>
+<pre><code class="language-json">{
+  &quot;category&quot;: &quot;04_meals&quot;,
+  &quot;confidence&quot;: 8</code></pre>
+<p><em>The parser can already see confidence, but the next chunk may contain:</em></p>
+<pre><code>7,</code></pre>
+<p>The final value is 87, not 8.</p>
+<p>A string is complete only after its closing quote. A number is complete only after a valid terminator, such as a comma, closing brace, or whitespace.</p>
+<p>A partial parse that may disagree with the final JSON is not safe to use. Early commit therefore means finding a prefix whose meaning can no longer change, even though the full response is still arriving.</p>
+<h3>The schema is also a schedule</h3>
+<p>The first implementation step was almost disappointingly simple: we placed the verdict fields first.</p>
+<p>Until then, the fields had sat in the order they were added, which put confidence, the newest arrival, at the very end. Nobody had chosen that order. It was the order the requirements arrived in.</p>
+<p><em>A simplified version of the schema looked like this:</em></p>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;properties&quot;: {
+    &quot;category&quot;:   { &quot;type&quot;: &quot;string&quot;, &quot;enum&quot;: [&quot;01_income_employment&quot;, &quot;...&quot;, &quot;08_personal&quot;] },
+    &quot;confidence&quot;: { &quot;type&quot;: &quot;number&quot;, &quot;minimum&quot;: 0, &quot;maximum&quot;: 100 },
+    &quot;customer_friendly_explanation&quot;: { &quot;type&quot;: &quot;string&quot; },
+    &quot;internal_explanation&quot;: { &quot;type&quot;: &quot;string&quot; },
+    &quot;citation&quot;: { &quot;type&quot;: &quot;string&quot; }
+  }
+}</code></pre>
+<blockquote><p>The exact way field order is expressed varies by provider: some expose an explicit ordering property, others follow the order of properties in the schema. Strict modes typically also require every property to appear in <code>required</code>, and commonly reject schemas that allow additional properties. Either way, test it against the specific model and API path you use in production.</p></blockquote>
+<p>Most engineers first encounter a schema as a validation contract: the completed response must have this shape.</p>
+<p>During constrained generation, it serves another purpose. It influences what the decoder is allowed to produce next.</p>
+<blockquote><p><strong>The schema is not only a contract. It is a schedule.</strong></p></blockquote>
+<p>The last verdict field defines the earliest possible commit point.</p>
+<figure><img src="figures/fig2.png" alt="Two token bars of equal length. In schema A the fields sit in the order they were added: a small indigo category segment first, striped essay in the middle, a small indigo confidence segment last, and the commit flag points at the closing brace. In schema B both verdict fields sit first and the commit flag points at token 30."><figcaption>Figure 2 — Same response, earlier action. <strong>Same fields, same tokens; only the commit point moved.</strong></figcaption></figure>
+<p>Nothing generates faster; the useful tokens simply arrive earlier.</p>
+<blockquote><p><strong>Provider requirement.</strong> The API must enforce the schema during generation and preserve field order while streaming. Verify both on the exact model and API path you use. And note: streamed tool-call arguments often expose the same partial-JSON shape.</p></blockquote>
+<h3>Three proofs before commit</h3>
+<p>We wanted the early path to be conservative.</p>
+<p>A missing early verdict was acceptable. The system could fall back to waiting for the complete response or use a deterministic default.</p>
+<p>A wrongly parsed verdict was not acceptable.</p>
+<p>The parser therefore demands three proofs.</p>
+<h3>Proof 1: The value is complete</h3>
+<p>For category, the parser waits for the closing quote.</p>
+<p>For confidence, it waits for a valid JSON terminator.</p>
+<p><em>The fragment below is not enough:</em></p>
+<pre><code>&quot;confidence&quot;: 8</code></pre>
+<p><em>This one is:</em></p>
+<pre><code>&quot;confidence&quot;: 8,</code></pre>
+<p>The comma proves that the number has ended.</p>
+<h3>Proof 2: The value belongs to the closed set</h3>
+<p>A syntactically valid string is not necessarily a valid category.</p>
+<p>The parser checks the extracted value against the same enumeration used in the schema.</p>
+<p>This matters even when constrained decoding is enabled. It gives the application its own explicit invariant rather than delegating all trust to the provider.</p>
+<p>It also protects against prefix ambiguity.</p>
+<p><em>Suppose both of these values exist:</em></p>
+<pre><code>04_meals
+04_meals_entertainment</code></pre>
+<p>Seeing the characters <code>04_meals</code> is not enough. Seeing a closing quote and confirming membership in the allowed set is.</p>
+<h3>Proof 3: The order is intact</h3>
+<p>If an explanation field appears before the verdict is complete, the provider or model has violated the ordering contract.</p>
+<p>We do not try to recover creatively.</p>
+<p>We abort the early path and return to the deterministic pipeline.</p>
+<p>A missing prediction is recoverable. A confidently misparsed one is not.</p>
+<figure><img src="figures/fig3.png" alt="Three buffers with their structural evidence and outcome. A complete verdict with its terminator commits. A number without a terminator waits. An essay field arriving before the verdict aborts."><figcaption>Figure 3 — Commit, wait, abort. <strong>Three buffers, three structural outcomes.</strong> The next frame may append <code>7,</code> and the final value becomes <code>87</code>; that is why the middle buffer waits.</figcaption></figure>
+<h3>The parser</h3>
+<p><em>The decision path, condensed to what matters:</em></p>
+<pre><code class="language-python">DECISION_RE = re.compile(
+    r&#x27;&quot;category&quot;\s*:\s*&quot;(?P&lt;category&gt;[A-Za-z0-9_]+)&quot;\s*,\s*&#x27;
+    r&#x27;&quot;confidence&quot;\s*:\s*(?P&lt;confidence&gt;\d+(?:\.\d+)?)&#x27;
+    r&#x27;\s*[,}\s]&#x27;   # ← check 1: terminator required
+)
+
+class DecisionParser:
+    def __init__(self) -&gt; None:
+        self.buffer = &quot;&quot;
+
+    def feed(self, chunk: str) -&gt; Optional[Decision]:
+        self.buffer += chunk
+        match = DECISION_RE.search(self.buffer)
+        if match:
+            category = match.group(&quot;category&quot;)
+            if category not in CATEGORY_ENUM:          # ← check 2: membership
+                raise AbortEarlyCommit(category)
+            confidence = float(match.group(&quot;confidence&quot;))
+            if not 0 &lt;= confidence &lt;= 100:
+                raise AbortEarlyCommit(confidence)
+            return Decision(category, confidence)
+        # order check only after the match attempt: one chunk may hold
+        # the end of the verdict and the start of the essay
+        if any(m in self.buffer for m in ESSAY_MARKERS):  # ← check 3: order
+            raise AbortEarlyCommit(&quot;essay before verdict&quot;)
+        return None</code></pre>
+<blockquote><p>The three checks marked above are the whole idea. The full listing — imports, the enum set, the frozen dataclass — and a test suite covering the cases in this article are here: <a href="https://github.com/nturusin/llm-streaming-early-commit">github.com/nturusin/llm-streaming-early-commit</a>. No dependencies beyond the standard library.</p></blockquote>
+<p>The order inside <code>feed</code> matters.</p>
+<p>A single frame may contain the end of confidence and the beginning of the first explanation. If we checked for essay fields first, we could reject a perfectly valid stream.</p>
+<p>The parser therefore tries to prove that the verdict is complete before checking whether anything arrived out of order.</p>
+<p>It also parses the accumulated buffer, never the latest chunk. Chunk boundaries are transport details, not syntax.</p>
+<p>At this point, the decision is locally final even though the response is globally incomplete.</p>
+<h2>Part III · Operate — What happens after we act?</h2>
+<p>At 0.65 seconds, the verdict replaced the deterministic provisional category already on screen. The response ran on to 1.33 seconds, but that remaining work no longer blocked the user. This is why we measure time-to-act, not merely time-to-complete.</p>
+<h3>Drain and verify</h3>
+<p>Committing early does not require abandoning the response.</p>
+<p>After the verdict lands, the open stream is handed to a bounded background reader. That reader:</p>
+<ol><li>drains the remaining frames;</li><li>assembles the complete JSON;</li><li>validates it against the schema;</li><li>confirms that the final verdict matches the early verdict;</li><li>stores the explanations and citation.</li></ol>
+<p>The background reader does not create the guarantee; Part II&#x27;s structural proofs do. Its job is to verify that the completed object preserves the verdict already committed.</p>
+<p>The completed object still gives us a second line of defence. If a provider update ever violates the invariant, the background reader is where the mismatch becomes visible.</p>
+<h3>The world can change mid-sentence</h3>
+<p>There is another race that does not occur inside the JSON stream. The application keeps changing while the stream is open: a human may replace the model&#x27;s verdict before the explanation finishes.</p>
+<figure><img src="figures/fig4-override.png" alt="Timeline: at 0.65s the model commits 04_meals, at 0.90s a human changes it to 08_personal, at 1.33s the explanation finishes, at 1.34s the stale explanation is discarded."><figcaption>Figure 4 — Application state can change while the stream is still open.</figcaption></figure>
+<p>Before storing the essay, the background reader re-checks ownership of the live decision. If a human has overruled the model, the explanation is discarded.</p>
+<p><strong>Never attach model prose to a decision the model no longer owns.</strong></p>
+<p>If the stream fails during the background drain, the verdict remains valid. The explanation slot stays empty. The user does not lose the category they already received.</p>
+<h3>Production policy</h3>
+<p>The parser may be small, but it sits inside a less glamorous collection of deadlines, cancellation rules, connection limits, and fallbacks.</p>
+<p>Those details determine whether the optimization survives production.</p>
+<table><thead><tr><th>Risk</th><th>Policy</th></tr></thead><tbody><tr><td>Slow verdict</td><td>Hard 2-second deadline to the verdict; on expiry the deterministic pipeline answers. Worst observed: 0.91s.</td></tr><tr><td>Caller disconnects</td><td>Cancel the upstream generation before the commit. After it, the drain is expected to outlive the request.</td></tr><tr><td>Retry temptation</td><td>Never retry a live stream: a retry is a second generation, a second bill, and a race between two commits.</td></tr><tr><td>Proxy buffering</td><td>Any middle layer can quietly batch the stream and everything still &quot;works&quot;, just late. Test incrementality end to end.</td></tr><tr><td>Connection pressure</td><td>Bound the background drains (we ran 64) and size connection pools for full-response lifetime, not verdict time.</td></tr><tr><td>Deploys</td><td>Cancelling in-flight drains is a product decision, not a side effect: the verdict stays, only essays are lost.</td></tr><tr><td>Missing usage data</td><td>Token accounting often rides the final frame; close a stream early and the cost dashboard undercounts politely.</td></tr><tr><td>Cost pressure</td><td>Closing the stream immediately after the verdict saves output tokens, but forfeits the essay: a separate optimization with different product semantics.</td></tr></tbody></table>
+<h3>What we measured</h3>
+<p>We measured on the production path rather than in a harness. The classifier calls Gemini 3.5 Flash through the Vertex AI API in <code>europe-west2</code>, behind our internal LLM proxy, using the real prompt and the real schema: about 24,000 input tokens of categorisation rules and merchant context, and an average of 250 output tokens per response. The figures below cover 5,000 live calls.</p>
+<table><thead><tr><th>Metric</th><th>median</th><th>worst observed</th></tr></thead><tbody><tr><td>Time to <strong>early verdict</strong></td><td>0.65s</td><td>0.91s</td></tr><tr><td>Time to <strong>complete response</strong></td><td>1.33s</td><td>1.79s</td></tr><tr><td>Early parse disagreed with final JSON</td><td>0</td><td>—</td></tr><tr><td>Out-of-order aborts</td><td>0</td><td>—</td></tr></tbody></table>
+<blockquote><p>The real guarantee is the structure (quote, terminator, membership), not the tally.</p></blockquote>
+<p>The zero rows are a sanity check, not the proof. Across 5,000 calls the early parse never disagreed with the completed object, but zero observed disagreements still leaves, by the rule of three, roughly a 0.06% upper bound on the true disagreement rate. The guarantee that matters is structural: the closing quote, the terminator, and enum membership. The counts only confirm that nothing in production contradicted it.</p>
+<p>The median time-to-act fell by approximately half. That ratio will not transfer directly to another application.</p>
+<p>Note the shape of this workload: against roughly 24,000 input tokens, 250 output tokens is almost nothing. The prefill cost is fixed and largely outside your control; the decode tail is not. Early commit removes most of the part you can actually influence — which is also why the gain depends on the ratio of verdict tokens to essay tokens rather than on raw model speed.</p>
+<p>If the complete response already fits comfortably inside the application&#x27;s latency budget, there may be nothing worth optimizing.</p>
+<p>Measure the real payload. Published model latency says little about the position of the fields your own system needs.</p>
+<h3>Limits</h3>
+<p>Early commit works when the critical fields can be made structurally final. Three situations disqualify it:</p>
+<ul><li><strong>The verdict cannot be made self-contained and structurally final.</strong> Free-form decisions have no safe early boundary, and a verdict that needs later fields to interpret it is not a verdict.</li><li><strong>The provider cannot give you constrained, ordered streaming.</strong> Then there is nothing to commit early on, and the safe failure mode is waiting for the complete response.</li><li><strong>There is no deterministic fallback, or the full response already meets the latency target.</strong> Early commit assumes the model is optional, and the extra concurrency, parsing, and lifecycle management are not free.</li></ul>
+<h3>The implementation checklist</h3>
+<p><strong>DESIGN</strong></p>
+<ul><li>Separate fields into a verdict and an essay.</li></ul>
+<ul><li>Put the verdict first in the schema.</li></ul>
+<ul><li>Verify empirically that the provider preserves the order.</li></ul>
+<ul><li>Constrain the committed value to a closed set whenever possible.</li></ul>
+<p><strong>PARSE</strong></p>
+<ul><li>Parse the accumulated buffer, never individual frames.</li></ul>
+<ul><li>Require a closing quote or valid JSON terminator.</li></ul>
+<ul><li>Re-check enum membership inside the application.</li></ul>
+<ul><li>Abort if later fields arrive before the verdict is complete.</li></ul>
+<p><strong>VALIDATE</strong></p>
+<ul><li>Compare the early verdict with the final object.</li></ul>
+<ul><li>Re-check live application state before storing explanations.</li></ul>
+<p><strong>OPERATE</strong></p>
+<ul><li>Drain the remainder in a bounded background worker.</li></ul>
+<ul><li>Set a hard verdict deadline and fall back deterministically.</li></ul>
+<ul><li>Avoid retries after streaming begins.</li></ul>
+<ul><li>Test incrementality through the full network stack.</li></ul>
+<p>None of the parts is individually novel: constrained decoding, incremental parsing, background work, and deterministic fallbacks are all ordinary. What the arrangement buys is a change in when the system is allowed to act. Put the decision fields first so they finish early; prove they are structurally final rather than merely present; commit; then drain the explanation off the request path and check that the finished object still agrees with what you committed.</p>
+<p>A structured LLM response does not have to become globally complete before part of it becomes locally final.</p>
+<p>Once the decision is irreversible, the system can move.</p>
+<p>The essay can finish its sentence.</p>
+<h3>Try it on your stack</h3>
+<p>Put a closed-set decision first and a long explanation last. Stream the response, record when the decision becomes structurally final, and compare that with the full-response time.</p>
+<p>The reference implementation from this article is at <a href="https://github.com/nturusin/llm-streaming-early-commit">github.com/nturusin/llm-streaming-early-commit</a>. It also ships a probe that runs the check against a real model and reports whether field order held, whether the early verdict matched the completed object, and how much came off the critical path:</p>
+<pre><code class="language-bash">python3 test_early_commit.py                      # structural tests
+python3 probe.py --project YOUR_PROJECT --runs 20  # measure your own stack</code></pre>
+<p>Official documentation:</p>
+<ul><li><strong>OpenAI</strong> — <a href="https://developers.openai.com/api/docs/guides/structured-outputs">Structured Outputs</a> · <a href="https://developers.openai.com/api/docs/guides/streaming-responses">Streaming Responses</a> Structured Outputs can be processed while model responses or function-call arguments are still being generated. OpenAI also documents that Structured Outputs preserve the order of keys in the schema.</li><li><strong>Anthropic</strong> — <a href="https://platform.claude.com/docs/en/build-with-claude/structured-outputs">Structured Outputs</a> · <a href="https://platform.claude.com/docs/en/build-with-claude/streaming">Streaming Messages</a> Claude&#x27;s Structured Outputs use constrained decoding and can be streamed like ordinary responses. Object properties retain their defined order, with required properties emitted before optional ones.</li><li><strong>Google Gemini</strong> — <a href="https://ai.google.dev/gemini-api/docs/structured-output">Structured Outputs</a> Gemini can stream Structured Outputs as partial JSON strings that concatenate into the final object. Its <code>generateContent</code> documentation also states that fields are produced in schema-key order.</li><li><strong>Amazon Bedrock</strong> — <a href="https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html">Structured Outputs</a> Bedrock exposes Structured Outputs through streaming paths including <code>ConverseStream</code> and <code>InvokeModelWithResponseStream</code> for supported models.</li><li><strong>vLLM</strong> — <a href="https://docs.vllm.ai/en/latest/features/structured_outputs/">Structured Outputs</a> For self-hosted models, vLLM supports schema-, grammar-, regex-, and choice-constrained output, including streaming through its OpenAI-compatible server.</li></ul>
+<p>Verify schema enforcement, field ordering, and chunk behavior on the exact model and API path you plan to ship.</p>
+</body></html>

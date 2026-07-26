@@ -371,8 +371,8 @@ Put a closed-set decision first and a long explanation last. Stream the response
 The reference implementation from this article is at [github.com/nturusin/llm-streaming-early-commit](https://github.com/nturusin/llm-streaming-early-commit). It also ships a probe that runs the check against a real model and reports whether field order held, whether the early verdict matched the completed object, and how much came off the critical path:
 
 ```bash
-python3 test_early_commit.py                      # structural tests, including the 8 -> 87 case
-python3 probe.py --project YOUR_PROJECT --runs 20  # measure it on your own stack
+python3 test_early_commit.py                      # structural tests
+python3 probe.py --project YOUR_PROJECT --runs 20  # measure your own stack
 ```
 
 Official documentation:
