@@ -1,0 +1,8 @@
+fig1:
+The schema reflected the order of requests, not the order of urgency. The essay grew gradually; the commit point moved only when confidence, the second field needed immediately, was appended after it.
+
+fig2:
+Same fields, same tokens; only the commit point moved.
+
+fig3:
+Three buffers, three structural outcomes. The next frame may append 7, and the final value becomes 87; that is why the middle buffer waits.

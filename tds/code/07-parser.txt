@@ -1,0 +1,26 @@
+DECISION_RE = re.compile(
+    r'"category"\s*:\s*"(?P<category>[A-Za-z0-9_]+)"\s*,\s*'
+    r'"confidence"\s*:\s*(?P<confidence>\d+(?:\.\d+)?)'
+    r'\s*[,}\s]'   # ← check 1: terminator required
+)
+
+class DecisionParser:
+    def __init__(self) -> None:
+        self.buffer = ""
+
+    def feed(self, chunk: str) -> Optional[Decision]:
+        self.buffer += chunk
+        match = DECISION_RE.search(self.buffer)
+        if match:
+            category = match.group("category")
+            if category not in CATEGORY_ENUM:          # ← check 2: membership
+                raise AbortEarlyCommit(category)
+            confidence = float(match.group("confidence"))
+            if not 0 <= confidence <= 100:
+                raise AbortEarlyCommit(confidence)
+            return Decision(category, confidence)
+        # order check only after the match attempt: one chunk may hold
+        # the end of the verdict and the start of the essay
+        if any(m in self.buffer for m in ESSAY_MARKERS):  # ← check 3: order
+            raise AbortEarlyCommit("essay before verdict")
+        return None
