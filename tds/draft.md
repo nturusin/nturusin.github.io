@@ -370,19 +370,21 @@ Put a closed-set decision first and a long explanation last. Stream the response
 
 The reference implementation is at [github.com/nturusin/llm-streaming-early-commit](https://github.com/nturusin/llm-streaming-early-commit): the parser with its structural checks, and a probe that runs the check against a real model and reports whether field order held, whether the early verdict matched the completed object, and how much came off the critical path.
 
-Official documentation:
+Where to look, and the question to answer in each case. None of the below is a
+guarantee: providers change, and the only answer that counts comes from the model
+and API path you actually ship.
 
 - **OpenAI** — [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs) · [Streaming Responses](https://developers.openai.com/api/docs/guides/streaming-responses)
-  Structured Outputs can be processed while model responses or function-call arguments are still being generated. OpenAI also documents that Structured Outputs preserve the order of keys in the schema.
+  Does the key order of your schema survive into the response, and can function-call arguments be read while they are still being generated?
 - **Anthropic** — [Structured Outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs) · [Streaming Messages](https://platform.claude.com/docs/en/build-with-claude/streaming)
-  Claude's Structured Outputs use constrained decoding and can be streamed like ordinary responses. Object properties retain their defined order, with required properties emitted before optional ones.
+  Are object properties emitted in their declared order, and how do required and optional properties interact with that order?
 - **Google Gemini** — [Structured Outputs](https://ai.google.dev/gemini-api/docs/structured-output)
-  Gemini can stream Structured Outputs as partial JSON strings that concatenate into the final object. Its `generateContent` documentation also states that fields are produced in schema-key order.
+  Do the streamed partial JSON strings concatenate into the final object, and are fields produced in schema-key order?
 - **Amazon Bedrock** — [Structured Outputs](https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html)
-  Bedrock exposes Structured Outputs through streaming paths including `ConverseStream` and `InvokeModelWithResponseStream` for supported models.
+  Which streaming paths expose structured output for your model — `ConverseStream`, `InvokeModelWithResponseStream` — and with what constraints?
 - **vLLM** — [Structured Outputs](https://docs.vllm.ai/en/latest/features/structured_outputs/)
-  For self-hosted models, vLLM supports schema-, grammar-, regex-, and choice-constrained output, including streaming through its OpenAI-compatible server.
+  Which constraint types does your build support — schema, grammar, regex, choice — and do they hold while streaming?
 
 Verify schema enforcement, field ordering, and chunk behavior on the exact model and API path you plan to ship.
 
-*All figures created by the author.*
+*Figures 1 to 4 created by the author.*

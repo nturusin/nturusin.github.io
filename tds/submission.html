@@ -44,6 +44,8 @@ th { text-align: left; font-family: "Helvetica Neue", Arial, sans-serif; font-si
      border-bottom: 1.5px solid #999; padding: 6px 8px; }
 td { border-bottom: 1px solid #E2E2D8; padding: 6px 8px; vertical-align: top; }
 a { color: #3730A3; }
+figure.cover { margin: 0 0 22px; page-break-inside: avoid; }
+figure.cover img { width: 100%; height: auto; border-radius: 3px; border: 1px solid #E2E2D8; }
 </style></head>
 <body>
 <header class="title">
@@ -51,6 +53,10 @@ a { color: #3730A3; }
   <p class="subtitle">How we cut median LLM time-to-act from 1.33s to 0.65s by putting the decision fields first</p>
   <p class="byline">Nikolai Turusin</p>
 </header>
+<figure class="cover">
+  <img src="figures/cover-featured.jpg" alt="A car waits at a barrier gate whose light is already green and whose boom is lifting.">
+  <figcaption>Image by the author, generated with ChatGPT.</figcaption>
+</figure>
 <p>A structured LLM response can become useful before it becomes complete.</p>
 <p>In our transaction classifier, the category and confidence score arrived in roughly the first thirty output tokens. That was enough for the application to act. The next two hundred or so tokens were explanations, citations, and internal notes intended for humans.</p>
 <p>Yet we had been treating the entire JSON object as one atomic result.</p>
@@ -237,8 +243,8 @@ class DecisionParser:
 <h3>Try it on your stack</h3>
 <p>Put a closed-set decision first and a long explanation last. Stream the response, record when the decision becomes structurally final, and compare that with the full-response time.</p>
 <p>The reference implementation is at <a href="https://github.com/nturusin/llm-streaming-early-commit">github.com/nturusin/llm-streaming-early-commit</a>: the parser with its structural checks, and a probe that runs the check against a real model and reports whether field order held, whether the early verdict matched the completed object, and how much came off the critical path.</p>
-<p>Official documentation:</p>
-<ul><li><strong>OpenAI</strong> — <a href="https://developers.openai.com/api/docs/guides/structured-outputs">Structured Outputs</a> · <a href="https://developers.openai.com/api/docs/guides/streaming-responses">Streaming Responses</a> Structured Outputs can be processed while model responses or function-call arguments are still being generated. OpenAI also documents that Structured Outputs preserve the order of keys in the schema.</li><li><strong>Anthropic</strong> — <a href="https://platform.claude.com/docs/en/build-with-claude/structured-outputs">Structured Outputs</a> · <a href="https://platform.claude.com/docs/en/build-with-claude/streaming">Streaming Messages</a> Claude&#x27;s Structured Outputs use constrained decoding and can be streamed like ordinary responses. Object properties retain their defined order, with required properties emitted before optional ones.</li><li><strong>Google Gemini</strong> — <a href="https://ai.google.dev/gemini-api/docs/structured-output">Structured Outputs</a> Gemini can stream Structured Outputs as partial JSON strings that concatenate into the final object. Its <code>generateContent</code> documentation also states that fields are produced in schema-key order.</li><li><strong>Amazon Bedrock</strong> — <a href="https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html">Structured Outputs</a> Bedrock exposes Structured Outputs through streaming paths including <code>ConverseStream</code> and <code>InvokeModelWithResponseStream</code> for supported models.</li><li><strong>vLLM</strong> — <a href="https://docs.vllm.ai/en/latest/features/structured_outputs/">Structured Outputs</a> For self-hosted models, vLLM supports schema-, grammar-, regex-, and choice-constrained output, including streaming through its OpenAI-compatible server.</li></ul>
+<p>Where to look, and the question to answer in each case. None of the below is a guarantee: providers change, and the only answer that counts comes from the model and API path you actually ship.</p>
+<ul><li><strong>OpenAI</strong> — <a href="https://developers.openai.com/api/docs/guides/structured-outputs">Structured Outputs</a> · <a href="https://developers.openai.com/api/docs/guides/streaming-responses">Streaming Responses</a> Does the key order of your schema survive into the response, and can function-call arguments be read while they are still being generated?</li><li><strong>Anthropic</strong> — <a href="https://platform.claude.com/docs/en/build-with-claude/structured-outputs">Structured Outputs</a> · <a href="https://platform.claude.com/docs/en/build-with-claude/streaming">Streaming Messages</a> Are object properties emitted in their declared order, and how do required and optional properties interact with that order?</li><li><strong>Google Gemini</strong> — <a href="https://ai.google.dev/gemini-api/docs/structured-output">Structured Outputs</a> Do the streamed partial JSON strings concatenate into the final object, and are fields produced in schema-key order?</li><li><strong>Amazon Bedrock</strong> — <a href="https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html">Structured Outputs</a> Which streaming paths expose structured output for your model — <code>ConverseStream</code>, <code>InvokeModelWithResponseStream</code> — and with what constraints?</li><li><strong>vLLM</strong> — <a href="https://docs.vllm.ai/en/latest/features/structured_outputs/">Structured Outputs</a> Which constraint types does your build support — schema, grammar, regex, choice — and do they hold while streaming?</li></ul>
 <p>Verify schema enforcement, field ordering, and chunk behavior on the exact model and API path you plan to ship.</p>
-<p><em>All figures created by the author.</em></p>
+<p><em>Figures 1 to 4 created by the author.</em></p>
 </body></html>

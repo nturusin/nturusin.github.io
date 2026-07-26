@@ -19,6 +19,11 @@ TITLE = "Act on the Verdict. Stream the Rest."
 SUBTITLE = "How we cut median LLM time-to-act from 1.33s to 0.65s by putting the decision fields first"
 AUTHOR = "Nikolai Turusin"
 
+# Proposed featured image. TDS sets its own headline, so this version carries no
+# type; the credit is required because it is generated rather than photographed.
+COVER = "figures/cover-featured.jpg"
+COVER_CREDIT = "Image by the author, generated with ChatGPT."
+
 STYLE = """
 @page { size: A4; margin: 20mm 18mm; }
 * { box-sizing: border-box; }
@@ -62,6 +67,8 @@ th { text-align: left; font-family: "Helvetica Neue", Arial, sans-serif; font-si
      border-bottom: 1.5px solid #999; padding: 6px 8px; }
 td { border-bottom: 1px solid #E2E2D8; padding: 6px 8px; vertical-align: top; }
 a { color: #3730A3; }
+figure.cover { margin: 0 0 22px; page-break-inside: avoid; }
+figure.cover img { width: 100%; height: auto; border-radius: 3px; border: 1px solid #E2E2D8; }
 """
 
 
@@ -204,6 +211,10 @@ def build(markdown: str) -> str:
   <p class="subtitle">{html.escape(SUBTITLE)}</p>
   <p class="byline">{html.escape(AUTHOR)}</p>
 </header>
+<figure class="cover">
+  <img src="{COVER}" alt="A car waits at a barrier gate whose light is already green and whose boom is lifting.">
+  <figcaption>{html.escape(COVER_CREDIT)}</figcaption>
+</figure>
 {render(markdown)}
 </body></html>
 """
