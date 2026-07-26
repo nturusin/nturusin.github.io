@@ -254,7 +254,7 @@ After the verdict lands, the open stream is handed to a bounded background reade
 
 The background reader does not create the guarantee; Part II's structural proofs do. Its job is to verify that the completed object preserves the verdict already committed.
 
-The completed object still gives us a second line of defence. If a provider update ever violates the invariant, the background reader is where the mismatch becomes visible.
+The completed object still gives us a second line of defense. If a provider update ever violates the invariant, the background reader is where the mismatch becomes visible.
 
 ### The world can change mid-sentence
 
@@ -289,7 +289,7 @@ Those details determine whether the optimization survives production.
 
 ### What we measured
 
-We measured on the production path rather than in a harness. The classifier calls Gemini 3.5 Flash through the Vertex AI API in `europe-west2`, behind our internal LLM proxy, using the real prompt and the real schema: about 24,000 input tokens of categorisation rules and merchant context, and an average of 250 output tokens per response. The figures below cover 5,000 live calls.
+We measured on the production path rather than in a harness. The classifier calls Gemini 3.5 Flash through the Vertex AI API in `europe-west2`, behind our internal LLM proxy, using the real prompt and the real schema: about 24,000 input tokens of categorization rules and merchant context, and an average of 250 output tokens per response. The figures below cover 5,000 live calls.
 
 | Metric | median | worst observed |
 |---|---|---|
@@ -368,12 +368,7 @@ The essay can finish its sentence.
 
 Put a closed-set decision first and a long explanation last. Stream the response, record when the decision becomes structurally final, and compare that with the full-response time.
 
-The reference implementation from this article is at [github.com/nturusin/llm-streaming-early-commit](https://github.com/nturusin/llm-streaming-early-commit). It also ships a probe that runs the check against a real model and reports whether field order held, whether the early verdict matched the completed object, and how much came off the critical path:
-
-```bash
-python3 test_early_commit.py                      # structural tests
-python3 probe.py --project YOUR_PROJECT --runs 20  # measure your own stack
-```
+The reference implementation is at [github.com/nturusin/llm-streaming-early-commit](https://github.com/nturusin/llm-streaming-early-commit): the parser with its structural checks, and a probe that runs the check against a real model and reports whether field order held, whether the early verdict matched the completed object, and how much came off the critical path.
 
 Official documentation:
 
@@ -389,3 +384,5 @@ Official documentation:
   For self-hosted models, vLLM supports schema-, grammar-, regex-, and choice-constrained output, including streaming through its OpenAI-compatible server.
 
 Verify schema enforcement, field ordering, and chunk behavior on the exact model and API path you plan to ship.
+
+*All figures created by the author.*
