@@ -1,32 +1,20 @@
-A structured LLM response can become useful before it becomes complete.
+Our transaction classifier returns a JSON object with a category, a confidence score, two explanations and a citation. The category and confidence, the only fields the application acts on, fit in roughly the first thirty output tokens. The remaining couple of hundred tokens are prose written for people who may read it later, or never. Until recently we still waited for the closing brace before doing anything.
 
-In our transaction classifier, the category and confidence score arrived in roughly the first thirty output tokens. That was enough for the application to act. The next two hundred or so tokens were explanations, citations, and internal notes intended for humans.
+When we reordered the schema so the decision fields come first, and committed them as soon as they were provably complete, median time-to-act on our production path fell from 1.33 to 0.65 seconds. The explanation still arrives; it just no longer blocks anything. This article describes how we did it, what "provably complete" means for a half-received JSON document, and what we had to handle once the request path and the response lifetime came apart.
 
-Yet we had been treating the entire JSON object as one atomic result.
+## How the response got slow
 
-Once we put the decision fields first and acted as soon as they became structurally final, median time-to-act fell from 1.33 seconds to 0.65. The explanation continued in the background.
+The classifier started with one job: look at a bank transaction and return a category. Coffee in, `04_meals` out. The response was a few tokens and felt instant.
 
-That response shape had not been designed in one sitting. It had accumulated one reasonable product request at a time.
+Then the requirements grew, each for a good reason. The app needed to explain a category to the customer, so we added a customer-facing explanation. Our accountants wanted a technical explanation and a pointer to the relevant guidance for reviewing odd cases, so we added an internal explanation and a citation. Finally we added a confidence score to route uncertain transactions to a review queue.
 
-At first, the classifier had one job: look at a bank transaction and return a category. Coffee in, `04_meals` out. The response was tiny and the interface felt immediate.
+Each field had a real consumer, but not the same deadline. The category and confidence are needed right away; the explanations are read later, on another screen or during an investigation. Because each field was appended as it was requested, confidence ended up last, and the moment the application could act moved to the end of the response.
 
-Then product did what product does. The app needed to explain each category, because a label that appears from nowhere does not inspire confidence, so we added a customer-friendly explanation. Our internal accountants wanted a more technical explanation and a citation to the relevant guidance, so they could review a classification when something looked wrong. Finally we added a confidence score, to route uncertain transactions into a review queue.
+![Four cumulative bars, one per version of the schema. In v1 the whole response is a single purple category field, and the earliest safe commit sits just after it. v2 appends a grey customer explanation; v3 appends a grey internal explanation and citation. Through all three versions the commit marker stays at the left, just after category. In v4 a second purple field, confidence, is appended at the very end, and the commit marker jumps to the far right, past the entire essay.](figures/fig1.png)
 
-Every field had a legitimate audience. They simply did not have the same deadline. Category determined what the application did immediately, and confidence decided routing. The explanations and the citation belonged to screens and investigations that happened later, if at all.
+*Figure 1 — How product requests moved the commit point. The field order followed the order of requests, not the order of urgency. Image by the author.*
 
-None of those additions seemed large enough to justify redesigning the request path. Together, however, they made the application wait for every audience at once, and pushed the moment of action all the way to the closing brace.
-
-The obvious remedies all looked expensive. We could split the work into two model calls, but then the second call might explain a different verdict from the one we had already committed. It would also repay per-call overhead, consume more rate-limit capacity, and complicate failure handling.
-
-The eventual fix did not require a second model call or a shorter response. It required a different way of reading the response we already had.
-
-## Part I · Diagnose — Why are we waiting?
-
-### A response has two audiences
-
-Most structured LLM responses serve two audiences. The application needs a short decision now. A human may need supporting prose later — an explanation, a citation, an audit note. Call them the **verdict** and the **essay**.
-
-A response from our classifier, lightly redacted, makes the split concrete:
+A typical response, lightly redacted:
 
 ```json
 {
@@ -38,63 +26,17 @@ A response from our classifier, lightly redacted, makes the split concrete:
 }
 ```
 
-The first two fields are the verdict: `category` is written to the transaction, `confidence` decides whether it enters a review queue. Everything after them is the essay. It is not filler — an accountant reviewing a questionable classification needs it — but nothing in the request path is waiting on it.
+I'll call the first two fields the *verdict* and the rest the *essay*. The obvious fixes were unattractive. Splitting the work into two model calls would double per-call overhead and rate-limit usage, and the second call could explain a different verdict from the one already committed. Shortening the essay meant taking features away from accountants. What we changed instead was how we read the response we already had.
 
-Requirements expand the essay far faster than the verdict. A classifier starts with a single decision field and accumulates prose around it, while the decision itself barely changes.
+## What already exists
 
-![Four cumulative bars, one per version of the schema. In v1 the whole response is a single purple category field, and the earliest safe commit sits just after it. v2 appends a grey customer explanation; v3 appends a grey internal explanation and citation. Through all three versions the commit marker stays at the left, just after category. In v4 a second purple field, confidence, is appended at the very end, and the commit marker jumps to the far right, past the entire essay.](figures/fig1.png)
+Streaming structured output is not new. [Instructor](https://python.useinstructor.com/concepts/partial/) yields partially filled Pydantic models as tokens arrive, the [Vercel AI SDK](https://ai-sdk.dev/v5/cookbook/node/stream-object) exposes a `partialObjectStream`, and libraries such as [partial-json](https://www.npmjs.com/package/partial-json) parse incomplete JSON directly. These tools are built mainly for rendering: show the user something as early as possible.
 
-*Figure 1 — How product requests moved the commit point. **The schema reflected the order of requests, not the order of urgency.** The essay grew gradually; the commit point moved only when `confidence`, the second field needed immediately, was appended after it.*
+Rendering and acting are different problems. A partial object tells you a field has *appeared*, not that its value is *final*, and showing a half-finished value for a moment is fine while writing it to a database is not. The rest of this article is about that gap: deciding when a streamed field is safe to act on, and what has to happen after you act on it.
 
-The response was already arriving one token at a time. We had simply decided that none of those tokens counted until the last one appeared.
+## Field order is part of the latency budget
 
-We had been treating the closing brace as if it marked the moment the model had finished *deciding*. It did not. It marked the moment the model had finished *explaining itself*.
-
-That distinction is the entire technique.
-
-> **Scope note.** Reordering an autoregressive output may affect the model's final choice, so accuracy must be benchmarked separately. Early reading cannot alter tokens already emitted; in our schema, the later prose explained the verdict rather than deriving it.
-
-## Part II · Prove — When is the verdict final?
-
-### A stream is not a sequence of values
-
-Streaming is usually treated as a UI feature: humans are comfortable reading half a sentence, so tokens appear as they are generated and perceived latency improves. Machines are less accommodating. Half a JSON document is not JSON: there is no closing brace, strings may be unfinished, and a conventional parser is correct to reject every incomplete prefix.
-
-A streamed response arrives as a sequence of frames, each carrying a delta: the next fragment of generated text. The boundaries are arbitrary. A frame may end inside a quoted string, after the first digit of a number, or immediately before the comma that proves a value is complete. No business logic should assign meaning to an individual frame; the only meaningful object is the accumulated buffer.
-
-Structured output changes what can be inferred from that buffer. When a provider enforces the schema during decoding, the model is no longer free to produce arbitrary text. That is a useful foundation, but it does not, by itself, make an early commit safe. The difficult part is knowing when a field is *finished*.
-
-### Presence is not finality
-
-A partial-JSON parser may tell you that a field has appeared in the buffer. That does not mean its value is complete.
-
-*Consider:*
-
-```json
-{
-  "category": "04_meals",
-  "confidence": 8
-```
-
-*The parser can already see confidence, but the next chunk may contain:*
-
-```
-7,
-```
-
-The final value is 87, not 8.
-
-A string is complete only after its closing quote. A number is complete only after a valid terminator, such as a comma, closing brace, or whitespace.
-
-A partial parse that may disagree with the final JSON is not safe to use. Early commit therefore means finding a prefix whose meaning can no longer change, even though the full response is still arriving.
-
-### The schema is also a schedule
-
-The first implementation step was almost disappointingly simple: we placed the verdict fields first.
-
-Until then, the fields had sat in the order they were added, which put confidence, the newest arrival, at the very end. Nobody had chosen that order. It was the order the requirements arrived in.
-
-*A simplified version of the schema looked like this:*
+When a provider enforces a JSON schema during decoding, the field order in the schema is also the order in which values are generated. The last verdict field therefore sets the earliest point at which the application can act. Our fix started with a one-line change in the schema: move `confidence` up next to `category`.
 
 ```json
 {
@@ -110,96 +52,47 @@ Until then, the fields had sat in the order they were added, which put confidenc
 }
 ```
 
-> The exact way field order is expressed varies by provider: some expose an explicit ordering property, others follow the order of properties in the schema. Strict modes typically also require every property to appear in `required`, and commonly reject schemas that allow additional properties. Either way, test it against the specific model and API path you use in production.
-
-Most engineers first encounter a schema as a validation contract: the completed response must have this shape.
-
-During constrained generation, it serves another purpose. It influences what the decoder is allowed to produce next.
-
-> **The schema is not only a contract. It is a schedule.**
-
-The last verdict field defines the earliest possible commit point.
+How the order is expressed differs by provider: some have an explicit ordering property, others follow the order of `properties`. Strict modes usually also require every property to be listed in `required` and reject `additionalProperties`. Whatever the API, check that the order survives on the exact model and endpoint you run in production, because this is the assumption everything else rests on.
 
 ![Two token bars of equal length. In schema A the fields sit in the order they were added: a small indigo category segment first, striped essay in the middle, a small indigo confidence segment last, and the commit flag points at the closing brace. In schema B both verdict fields sit first and the commit flag points at token 30.](figures/fig2.png)
 
-*Figure 2 — Same response, earlier action. **Same fields, same tokens; only the commit point moved.***
+*Figure 2 — Same fields and tokens; only the commit point moves. Image by the author.*
 
-Nothing generates faster; the useful tokens simply arrive earlier.
+Nothing is generated faster. The tokens the application needs simply arrive earlier.
 
-> **Provider requirement.** The API must enforce the schema during generation and preserve field order while streaming. Verify both on the exact model and API path you use. And note: streamed tool-call arguments often expose the same partial-JSON shape.
+Moving a field ahead of the text that explains it can, in principle, change what the model outputs, since an autoregressive model conditions each token on everything before it. We checked this separately; see the measurements below.
 
-### Three proofs before commit
+## When is a streamed value final?
 
-We wanted the early path to be conservative.
+A stream arrives as a sequence of chunks, and their boundaries are arbitrary: a chunk can end inside a string, after the first digit of a number, or just before the comma that closes a value. So the parser always works on the accumulated buffer, never on an individual chunk.
 
-A missing early verdict was acceptable. The system could fall back to waiting for the complete response or use a deterministic default.
+The hard part is knowing when a value can no longer change. Suppose the buffer currently holds:
 
-A wrongly parsed verdict was not acceptable.
-
-The parser therefore demands three proofs.
-
-### Proof 1: The value is complete
-
-For category, the parser waits for the closing quote.
-
-For confidence, it waits for a valid JSON terminator.
-
-*The fragment below is not enough:*
-
-```
-"confidence": 8
+```json
+{
+  "category": "04_meals",
+  "confidence": 8
 ```
 
-*This one is:*
+A partial parser will happily report `confidence = 8`, but the next chunk might be `7,`, and the real value is 87. A number is final only once it is followed by a terminator (a comma, a closing brace or whitespace); a string is final only after its closing quote.
 
-```
-"confidence": 8,
-```
+We wanted the early path to be conservative. Missing an early verdict is fine, since the system can wait for the full response or fall back to a deterministic categorizer. Acting on a misparsed verdict is not. Before committing, the parser therefore requires three things:
 
-The comma proves that the number has ended.
-
-### Proof 2: The value belongs to the closed set
-
-A syntactically valid string is not necessarily a valid category.
-
-The parser checks the extracted value against the same enumeration used in the schema.
-
-This matters even when constrained decoding is enabled. It gives the application its own explicit invariant rather than delegating all trust to the provider.
-
-It also protects against prefix ambiguity.
-
-*Suppose both of these values exist:*
-
-```
-04_meals
-04_meals_entertainment
-```
-
-Seeing the characters `04_meals` is not enough. Seeing a closing quote and confirming membership in the allowed set is.
-
-### Proof 3: The order is intact
-
-If an explanation field appears before the verdict is complete, the provider or model has violated the ordering contract.
-
-We do not try to recover creatively.
-
-We abort the early path and return to the deterministic pipeline.
-
-A missing prediction is recoverable. A confidently misparsed one is not.
+1. **The value is complete.** A closing quote for `category`, a terminator after `confidence`.
+2. **The value is in the allowed set.** We check `category` against the same enum used in the schema, even though constrained decoding should already guarantee it. This also covers prefix ambiguity: if both `04_meals` and `04_meals_entertainment` exist, seeing `04_meals` proves nothing until the closing quote arrives.
+3. **The order is intact.** If an essay field appears before the verdict is complete, the provider has broken the ordering contract. We don't try to recover; we abandon the early path and let the normal pipeline handle the request.
 
 ![Three buffers with their structural evidence and outcome. A complete verdict with its terminator commits. A number without a terminator waits. An essay field arriving before the verdict aborts.](figures/fig3.png)
 
-*Figure 3 — Commit, wait, abort. **Three buffers, three structural outcomes.** The next frame may append `7,` and the final value becomes `87`; that is why the middle buffer waits.*
+*Figure 3 — Commit, wait, abort. The middle buffer waits because the next chunk may turn 8 into 87. Image by the author.*
 
-### The parser
-
-*The decision path, condensed to what matters:*
+The core of the parser:
 
 ```python
 DECISION_RE = re.compile(
     r'"category"\s*:\s*"(?P<category>[A-Za-z0-9_]+)"\s*,\s*'
     r'"confidence"\s*:\s*(?P<confidence>\d+(?:\.\d+)?)'
-    r'\s*[,}\s]'   # ← check 1: terminator required
+    r'\s*[,}\s]'   # check 1: terminator required
 )
 
 class DecisionParser:
@@ -211,7 +104,7 @@ class DecisionParser:
         match = DECISION_RE.search(self.buffer)
         if match:
             category = match.group("category")
-            if category not in CATEGORY_ENUM:          # ← check 2: membership
+            if category not in CATEGORY_ENUM:          # check 2: membership
                 raise AbortEarlyCommit(category)
             confidence = float(match.group("confidence"))
             if not 0 <= confidence <= 100:
@@ -219,158 +112,68 @@ class DecisionParser:
             return Decision(category, confidence)
         # order check only after the match attempt: one chunk may hold
         # the end of the verdict and the start of the essay
-        if any(m in self.buffer for m in ESSAY_MARKERS):  # ← check 3: order
+        if any(m in self.buffer for m in ESSAY_MARKERS):  # check 3: order
             raise AbortEarlyCommit("essay before verdict")
         return None
 ```
 
-> The three checks marked above are the whole idea. The full listing — imports, the enum set, the frozen dataclass — and a test suite covering the cases in this article are here: [github.com/nturusin/llm-streaming-early-commit](https://github.com/nturusin/llm-streaming-early-commit). No dependencies beyond the standard library.
+The order of the checks inside `feed` matters. A single chunk can contain both the end of `confidence` and the start of the first explanation, so checking for essay fields first would reject a valid stream. The full listing and tests are in [github.com/nturusin/llm-streaming-early-commit](https://github.com/nturusin/llm-streaming-early-commit); it uses only the standard library.
 
-The order inside `feed` matters.
+## After the commit
 
-A single frame may contain the end of confidence and the beginning of the first explanation. If we checked for essay fields first, we could reject a perfectly valid stream.
+In our app, a deterministic categorizer shows a provisional category immediately. At 0.65 seconds the model's verdict replaces it, while the response keeps streaming until about 1.33 seconds.
 
-The parser therefore tries to prove that the verdict is complete before checking whether anything arrived out of order.
+The open stream is handed to a bounded background worker, which drains the remaining chunks, assembles and validates the complete JSON, checks that the final verdict matches the one already committed, and stores the explanations. The guarantee comes from the structural checks above; the worker is a second line of defence that would surface a mismatch if a provider update ever broke the ordering. If the stream fails during the drain, the verdict stands and the explanation slot stays empty.
 
-It also parses the accumulated buffer, never the latest chunk. Chunk boundaries are transport details, not syntax.
-
-At this point, the decision is locally final even though the response is globally incomplete.
-
-## Part III · Operate — What happens after we act?
-
-At 0.65 seconds, the verdict replaced the deterministic provisional category already on screen. The response ran on to 1.33 seconds, but that remaining work no longer blocked the user. This is why we measure time-to-act, not merely time-to-complete.
-
-### Drain and verify
-
-Committing early does not require abandoning the response.
-
-After the verdict lands, the open stream is handed to a bounded background reader. That reader:
-
-1. drains the remaining frames;
-2. assembles the complete JSON;
-3. validates it against the schema;
-4. confirms that the final verdict matches the early verdict;
-5. stores the explanations and citation.
-
-The background reader does not create the guarantee; Part II's structural proofs do. Its job is to verify that the completed object preserves the verdict already committed.
-
-The completed object still gives us a second line of defense. If a provider update ever violates the invariant, the background reader is where the mismatch becomes visible.
-
-### The world can change mid-sentence
-
-There is another race that does not occur inside the JSON stream. The application keeps changing while the stream is open: a human may replace the model's verdict before the explanation finishes.
+There is one race that has nothing to do with JSON. While the essay is still streaming, a person can change the category.
 
 ![Timeline: at 0.65s the model commits 04_meals, at 0.90s a human changes it to 08_personal, at 1.33s the explanation finishes, at 1.34s the stale explanation is discarded.](figures/fig4-override.png)
 
-*Figure 4 — Application state can change while the stream is still open.*
+*Figure 4 — The application state can change while the stream is still open. Image by the author.*
 
-Before storing the essay, the background reader re-checks ownership of the live decision. If a human has overruled the model, the explanation is discarded.
+So before storing the essay, the worker checks whether the model still owns the decision. If a person has overridden it, the explanation is discarded: it would justify a category the transaction no longer has.
 
-**Never attach model prose to a decision the model no longer owns.**
-
-If the stream fails during the background drain, the verdict remains valid. The explanation slot stays empty. The user does not lose the category they already received.
-
-### Production policy
-
-The parser may be small, but it sits inside a less glamorous collection of deadlines, cancellation rules, connection limits, and fallbacks.
-
-Those details determine whether the optimization survives production.
+The parser turned out to be the small part. Most of the work was in the operational details around it:
 
 | Risk | Policy |
 |---|---|
-| Slow verdict | Hard 2-second deadline to the verdict; on expiry the deterministic pipeline answers. Worst observed: 0.91s. |
-| Caller disconnects | Cancel the upstream generation before the commit. After it, the drain is expected to outlive the request. |
-| Retry temptation | Never retry a live stream: a retry is a second generation, a second bill, and a race between two commits. |
-| Proxy buffering | Any middle layer can quietly batch the stream and everything still "works", just late. Test incrementality end to end. |
-| Connection pressure | Bound the background drains (we ran 64) and size connection pools for full-response lifetime, not verdict time. |
-| Deploys | Cancelling in-flight drains is a product decision, not a side effect: the verdict stays, only essays are lost. |
-| Missing usage data | Token accounting often rides the final frame; close a stream early and the cost dashboard undercounts politely. |
-| Cost pressure | Closing the stream immediately after the verdict saves output tokens, but forfeits the essay: a separate optimization with different product semantics. |
+| Slow verdict | A hard 2-second deadline for the verdict; on expiry the deterministic pipeline answers. Worst observed: 0.91s. |
+| Caller disconnects | Before the commit, cancel the upstream generation. After it, the drain is expected to outlive the request. |
+| Retries | Never retry a live stream: a retry is a second generation, a second bill and a race between two commits. |
+| Proxy buffering | Any layer in between can silently batch the stream. Everything still works, just late, so test incrementality end to end. |
+| Connection pressure | Bound the background drains (we run 64) and size connection pools for the full response lifetime, not the verdict time. |
+| Deploys | Decide explicitly what happens to in-flight drains. The verdicts are safe; only explanations are lost. |
+| Usage accounting | Token usage often arrives in the final chunk, so a stream closed early makes cost dashboards undercount. |
+| Cost | Closing the stream right after the verdict saves output tokens but loses the essay. That is a separate trade-off with different product semantics. |
 
-### What we measured
+## What we measured
 
-We measured on the production path rather than in a harness. The classifier calls Gemini 3.5 Flash through the Vertex AI API in `europe-west2`, behind our internal LLM proxy, using the real prompt and the real schema: about 24,000 input tokens of categorization rules and merchant context, and an average of 250 output tokens per response. The figures below cover 5,000 live calls.
+We measured on the production path, not in a test harness. The classifier calls Gemini 3.5 Flash through Vertex AI in `europe-west2`, behind our internal LLM proxy, with the real prompt (about 24,000 input tokens of categorization rules and merchant context) and the real schema, averaging 250 output tokens per response. The numbers below cover 5,000 live calls.
 
-| Metric | median | worst observed |
+| Metric | Median | Worst observed |
 |---|---|---|
-| Time to **early verdict** | 0.65s | 0.91s |
-| Time to **complete response** | 1.33s | 1.79s |
-| Early parse disagreed with final JSON | 0 | — |
+| Time to early verdict | 0.65s | 0.91s |
+| Time to complete response | 1.33s | 1.79s |
+| Early verdict differed from final JSON | 0 | — |
 | Out-of-order aborts | 0 | — |
 
-> The real guarantee is the structure (quote, terminator, membership), not the tally.
+<!-- TODO (item 1): schema A vs schema B on the same transactions — category agreement, confidence distribution/calibration. -->
 
-The zero rows are a sanity check, not the proof. Across 5,000 calls the early parse never disagreed with the completed object, but zero observed disagreements still leaves, by the rule of three, roughly a 0.06% upper bound on the true disagreement rate. The guarantee that matters is structural: the closing quote, the terminator, and enum membership. The counts only confirm that nothing in production contradicted it.
+Zero disagreements in 5,000 calls doesn't prove the rate is zero. By the rule of three, the 95% upper bound is about 0.06%. The real guarantee is structural (closing quote, terminator, enum membership); the counts only show that production never contradicted it.
 
-The median time-to-act fell by approximately half. That ratio will not transfer directly to another application.
+The shape of the workload explains the size of the gain. With 24,000 input tokens and 250 output tokens, prefill is a fixed cost we can't do much about, while the decode tail is the part we control, and early commit removes most of it. The ratio will be different for other systems: it depends on how many tokens come after the last verdict field, not on how fast the model is. If the full response already fits your latency budget, there's nothing here worth the extra complexity.
 
-Note the shape of this workload: against roughly 24,000 input tokens, 250 output tokens is almost nothing. The prefill cost is fixed and largely outside your control; the decode tail is not. Early commit removes most of the part you can actually influence — which is also why the gain depends on the ratio of verdict tokens to essay tokens rather than on raw model speed.
+## When not to do this
 
-If the complete response already fits comfortably inside the application's latency budget, there may be nothing worth optimizing.
+- **The decision can't be made a short, closed-set value.** Free-form answers have no reliable point at which they are final, and a verdict that needs later fields to be interpreted is not a verdict.
+- **The provider doesn't give you constrained decoding with stable field order on streamed output.** Then there is nothing safe to commit early, and the right behaviour is to wait.
+- **There is no deterministic fallback, or the full response is already fast enough.** Early commit adds concurrency, parsing and lifecycle management, and only pays off when the latency matters.
 
-Measure the real payload. Published model latency says little about the position of the fields your own system needs.
+## Trying it on your system
 
-### Limits
+Put a closed-set decision first and the long explanation last, stream the response, and record when the decision becomes structurally final compared with when the response completes. The repository includes a probe that does this against a real model and reports whether the field order held, whether the early verdict matched the final object, and how much time came off the critical path.
 
-Early commit works when the critical fields can be made structurally final. Three situations disqualify it:
-
-- **The verdict cannot be made self-contained and structurally final.** Free-form decisions have no safe early boundary, and a verdict that needs later fields to interpret it is not a verdict.
-- **The provider cannot give you constrained, ordered streaming.** Then there is nothing to commit early on, and the safe failure mode is waiting for the complete response.
-- **There is no deterministic fallback, or the full response already meets the latency target.** Early commit assumes the model is optional, and the extra concurrency, parsing, and lifecycle management are not free.
-
-### The implementation checklist
-
-**DESIGN**
-
-- Separate fields into a verdict and an essay.
-
-- Put the verdict first in the schema.
-
-- Verify empirically that the provider preserves the order.
-
-- Constrain the committed value to a closed set whenever possible.
-
-**PARSE**
-
-- Parse the accumulated buffer, never individual frames.
-
-- Require a closing quote or valid JSON terminator.
-
-- Re-check enum membership inside the application.
-
-- Abort if later fields arrive before the verdict is complete.
-
-**VALIDATE**
-
-- Compare the early verdict with the final object.
-
-- Re-check live application state before storing explanations.
-
-**OPERATE**
-
-- Drain the remainder in a bounded background worker.
-
-- Set a hard verdict deadline and fall back deterministically.
-
-- Avoid retries after streaming begins.
-
-- Test incrementality through the full network stack.
-
-None of the parts is individually novel: constrained decoding, incremental parsing, background work, and deterministic fallbacks are all ordinary. What the arrangement buys is a change in when the system is allowed to act. Put the decision fields first so they finish early; prove they are structurally final rather than merely present; commit; then drain the explanation off the request path and check that the finished object still agrees with what you committed.
-
-A structured LLM response does not have to become globally complete before part of it becomes locally final.
-
-Once the decision is irreversible, the system can move.
-
-The essay can finish its sentence.
-
-### Try it on your stack
-
-Put a closed-set decision first and a long explanation last. Stream the response, record when the decision becomes structurally final, and compare that with the full-response time.
-
-The reference implementation is at [github.com/nturusin/llm-streaming-early-commit](https://github.com/nturusin/llm-streaming-early-commit): the parser with its structural checks, and a probe that runs the check against a real model and reports whether field order held, whether the early verdict matched the completed object, and how much came off the critical path.
-
-Official documentation:
+Before relying on it, check schema enforcement, field ordering and chunk behaviour in your provider's documentation and on the exact model you plan to ship:
 
 - **OpenAI** — [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs) · [Streaming Responses](https://developers.openai.com/api/docs/guides/streaming-responses)
 - **Anthropic** — [Structured Outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs) · [Streaming Messages](https://platform.claude.com/docs/en/build-with-claude/streaming)
@@ -378,6 +181,4 @@ Official documentation:
 - **Amazon Bedrock** — [Structured Outputs](https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html)
 - **vLLM** — [Structured Outputs](https://docs.vllm.ai/en/latest/features/structured_outputs/)
 
-Verify schema enforcement, field ordering, and chunk behavior on the exact model and API path you plan to ship.
-
-*Figures 1 to 4 created by the author.*
+None of the individual pieces is new: constrained decoding, incremental parsing, background work and fallbacks are all standard. What changes is *when* the system is allowed to act. A structured response doesn't have to be complete for part of it to be final.

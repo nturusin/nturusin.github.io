@@ -15,8 +15,8 @@ import html
 import re
 import sys
 
-TITLE = "Act on the Verdict. Stream the Rest."
-SUBTITLE = "How we cut median LLM time-to-act from 1.33s to 0.65s by putting the decision fields first"
+TITLE = "Halving LLM Time-to-Act by Reordering Your JSON Schema"
+SUBTITLE = "How we act on a classifier's verdict before the structured response finishes streaming: 1.33s to 0.65s at the median"
 AUTHOR = "Nikolai Turusin"
 
 # Proposed featured image. TDS sets its own headline, so this version carries no
@@ -201,6 +201,7 @@ def render(markdown: str) -> str:
 
 
 def build(markdown: str) -> str:
+    markdown = re.sub(r"<!--.*?-->\n?", "", markdown, flags=re.S)  # authoring notes
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <title>{html.escape(TITLE)}</title>
