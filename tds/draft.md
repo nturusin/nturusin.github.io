@@ -1,6 +1,6 @@
 At ANNA, our transaction classifier returns a JSON object with a category, a confidence score, two explanations and a citation. The category and confidence, the only fields the application acts on, fit in roughly the first thirty output tokens. The remaining couple of hundred tokens are prose written for people who may read it later, or never. Until recently we still waited for the closing brace before doing anything.
 
-When we reordered the schema so the decision fields come first, and committed them as soon as they were provably complete, median time-to-act on our production path fell from 1.33 to 0.65 seconds. The explanation still arrives; it just no longer blocks anything. This article describes how we did it, what "provably complete" means for a half-received JSON document, and what we had to handle once the request path and the response lifetime came apart.
+When we reordered the schema so the decision fields come first, and committed them as soon as they were provably complete, median time-to-act on our production path fell from 2.03 to 0.99 seconds. The explanation still arrives; it just no longer blocks anything. This article describes how we did it, what "provably complete" means for a half-received JSON document, and what we had to handle once the request path and the response lifetime came apart.
 
 ## How the response got slow
 
@@ -121,13 +121,13 @@ The order of the checks inside `feed` matters. A single chunk can contain both t
 
 ## After the commit
 
-In our app, a deterministic categorizer shows a provisional category immediately. At 0.65 seconds the model's verdict replaces it, while the response keeps streaming until about 1.33 seconds.
+In our app, a deterministic categorizer shows a provisional category immediately. At a median of about one second the model's verdict replaces it, while the response keeps streaming for roughly another second.
 
 The open stream is handed to a bounded background worker, which drains the remaining chunks, assembles and validates the complete JSON, checks that the final verdict matches the one already committed, and stores the explanations. The guarantee comes from the structural checks above; the worker is a second line of defence that would surface a mismatch if a provider update ever broke the ordering. If the stream fails during the drain, the verdict stands and the explanation slot stays empty.
 
 There is one race that has nothing to do with JSON. While the essay is still streaming, a person can change the category.
 
-![Timeline: at 0.65s the model commits 04_meals, at 0.90s a human changes it to 08_personal, at 1.33s the explanation finishes, at 1.34s the stale explanation is discarded.](figures/fig4-override.png)
+![Timeline: at 0.99s the model commits 04_meals, at 1.40s a human changes it to 08_personal, at 2.03s the explanation finishes, at 2.04s the stale explanation is discarded.](figures/fig4-override.png)
 
 *Figure 4 — The application state can change while the stream is still open. Image by the author.*
 
@@ -137,7 +137,7 @@ The parser turned out to be the small part. Most of the work was in the operatio
 
 | Risk | Policy |
 |---|---|
-| Slow verdict | A hard 2-second deadline for the verdict; on expiry the deterministic pipeline answers. Worst observed: 0.91s. |
+| Slow verdict | A hard 2-second deadline for the verdict; on expiry the deterministic pipeline answers. In production this happens for about 7% of live requests. |
 | Caller disconnects | Before the commit, cancel the upstream generation. After it, the drain is expected to outlive the request. |
 | Retries | Never retry a live stream: a retry is a second generation, a second bill and a race between two commits. |
 | Proxy buffering | Any layer in between can silently batch the stream. Everything still works, just late, so test incrementality end to end. |
@@ -148,16 +148,16 @@ The parser turned out to be the small part. Most of the work was in the operatio
 
 ## What we measured
 
-We measured on the production path, not in a test harness. The classifier calls Gemini 3.5 Flash through Vertex AI in `europe-west2`, behind our internal LLM proxy, with the real prompt (about 28,000 input tokens of categorization rules and merchant context) and the real schema, with a median of about 220 output tokens per response. The numbers below cover 5,000 live calls.
+We measured on the production path, not in a test harness. The classifier calls Gemini 3.5 Flash through Vertex AI in `europe-west2`, behind our internal LLM proxy, with the real prompt (about 28,000 input tokens of categorization rules and merchant context) and the real schema, with a median of about 220 output tokens per response. The numbers below cover 288,298 live requests between August and early October 2026 that received an early verdict. Times are measured inside our service, from receiving the request, so they include the proxy and network as well as the model.
 
-| Metric | Median | Worst observed |
-|---|---|---|
-| Time to early verdict | 0.65s | 0.91s |
-| Time to complete response | 1.33s | 1.79s |
-| Early verdict differed from final JSON | 0 | — |
-| Out-of-order aborts | 0 | — |
+| Metric | Median | p90 | p99 |
+|---|---|---|---|
+| Time to early verdict | 0.99s | 1.29s | 1.89s |
+| Time to complete response | 2.03s | 2.50s | 3.68s |
 
-Zero disagreements in 5,000 calls doesn't prove the rate is zero. By the rule of three, the 95% upper bound is about 0.06%. The real guarantee is structural (closing quote, terminator, enum membership); the counts only show that production never contradicted it.
+Across those requests the early verdict never differed from the completed JSON, and no request was aborted for out-of-order fields, an unknown category or an unparseable verdict. About 7% of all live requests (22,926 of 328,675) missed the 2-second verdict deadline and were answered by the deterministic pipeline instead; the time to the complete response is what every request would have waited without early commit.
+
+Zero disagreements in 288,298 requests doesn't prove the rate is zero. By the rule of three, the 95% upper bound is about 0.001%. The real guarantee is structural (closing quote, terminator, enum membership); the counts only show that production never contradicted it.
 
 Did moving `confidence` ahead of the explanations change the answers? We replayed 400 recent production requests through the same model at temperature 0 with the same prompts, using four schemas: the verdict-first order (A), the same schema again (A′, to measure the model's own run-to-run noise), the legacy order with `confidence` last (B), and a placebo (C) that keeps the verdict first but shuffles the three essay fields. All fields were required in every variant, so only the order differed.
 
