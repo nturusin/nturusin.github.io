@@ -148,29 +148,26 @@ The parser turned out to be the small part. Most of the work was in the operatio
 
 ## What we measured
 
-We measured on the production path, not in a test harness. The classifier calls Gemini 3.5 Flash through Vertex AI in `europe-west2`, behind our internal LLM proxy, with the real prompt (about 28,000 input tokens of categorization rules and merchant context) and the real schema, with a median of about 220 output tokens per response. The numbers below cover 288,298 live requests between August and early October 2026 that received an early verdict. Times are measured inside our service, from receiving the request, so they include the proxy and network as well as the model.
+These numbers come from production: 288,298 live requests between August and early October 2026. They are timed inside our service, so they include the network and our LLM proxy, not just the model.
 
-| Metric | Median | p90 | p99 |
-|---|---|---|---|
-| Time to early verdict | 0.99s | 1.29s | 1.89s |
-| Time to complete response | 2.03s | 2.50s | 3.68s |
+| | Median | p90 |
+|---|---|---|
+| Time to early verdict | **0.99s** | 1.29s |
+| Time to complete response | 2.03s | 2.50s |
 
-Across those requests the early verdict never differed from the completed JSON, and no request was aborted for out-of-order fields, an unknown category or an unparseable verdict. About 7% of all live requests (22,926 of 328,675) missed the 2-second verdict deadline and were answered by the deterministic pipeline instead; the time to the complete response is what every request would have waited without early commit.
+The early verdict always matched the completed response: zero mismatches. That doesn't prove the rate is zero, but it puts it below about 0.001%. About 7% of requests missed the 2-second deadline and were answered by the deterministic pipeline instead.
 
-Zero disagreements in 288,298 requests doesn't prove the rate is zero. By the rule of three, the 95% upper bound is about 0.001%. The real guarantee is structural (closing quote, terminator, enum membership); the counts only show that production never contradicted it.
+Why roughly half? Each request carries about 28,000 input tokens and produces about 220 output tokens. Reading the input is a fixed cost; early commit removes most of the time spent writing the output. Your ratio will depend on how much of the response comes after the decision fields. If the full response already fits your latency budget, this isn't worth the extra complexity.
 
-Did moving `confidence` ahead of the explanations change the answers? We replayed 400 recent production requests through the same model at temperature 0 with the same prompts, using four schemas: the verdict-first order (A), the same schema again (A′, to measure the model's own run-to-run noise), the legacy order with `confidence` last (B), and a placebo (C) that keeps the verdict first but shuffles the three essay fields. All fields were required in every variant, so only the order differed.
+**Does the new order change the answers?** We replayed 400 production requests at temperature 0 with three schemas: the current verdict-first order, the old order with `confidence` last, and a placebo that keeps the verdict first but shuffles the explanation fields. We also ran the current schema a second time to measure the model's own noise.
 
-| Comparison | Category changed | Confidence changed | Review routing changed |
-|---|---|---|---|
-| A vs A′ (same schema twice) | 1.8% | 5.0% | 0.3% |
-| A vs B (`confidence` first vs last) | 7.8% | 36% | 1.3% |
-| A vs C (placebo: essay fields shuffled) | 7.3% | 25% | 1.5% |
+| Compared with the current schema | Category changed |
+|---|---|
+| Same schema, run again | 1.8% |
+| Old order (`confidence` last) | 7.8% |
+| Placebo (explanations shuffled) | 7.3% |
 
-Moving `confidence` did not shift it in either direction: the mean change was −0.2 points (sign test p = 0.62), and review routing changed about as often as with the placebo. The category column is the more useful lesson. `category` comes first in every variant, yet it changed in 7.8% of requests with the legacy order and 7.3% with the placebo, compared with 1.8% from noise alone. The model is sensitive to *any* change in the schema, presumably because the schema is part of its input. A reorder should therefore be evaluated like a prompt change, not treated as a free refactor. Very few of these transactions have been corrected by a person, so this test measures stability, not which order is more accurate.
-
-
-The shape of the workload explains the size of the gain. With about 28,000 input tokens and 220 output tokens, prefill is a fixed cost we can't do much about, while the decode tail is the part we control, and early commit removes most of it. The ratio will be different for other systems: it depends on how many tokens come after the last verdict field, not on how fast the model is. If the full response already fits your latency budget, there's nothing here worth the extra complexity.
+Confidence didn't shift in either direction (average change −0.2 points). But the category changed as often with the placebo as with the real reorder, even though `category` comes first in every version. The model reacts to *any* schema change, because the schema is part of its input. So treat a reorder like a prompt change and evaluate it before shipping. This measures stability, not accuracy: few of these transactions have a human-checked label.
 
 ## When not to do this
 
