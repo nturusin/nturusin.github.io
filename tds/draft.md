@@ -167,7 +167,7 @@ Why roughly half? Each request carries about 28,000 input tokens and produces ab
 | Old order (`confidence` last) | 7.8% |
 | Placebo (explanations shuffled) | 7.3% |
 
-Confidence didn't shift in either direction (average change −0.2 points). But the category changed as often with the placebo as with the real reorder, even though `category` comes first in every version. The model reacts to *any* schema change, because the schema is part of its input. So treat a reorder like a prompt change and evaluate it before shipping. This measures stability, not accuracy: few of these transactions have a human-checked label.
+Confidence didn't shift in either direction (average change −0.2 points). But the category changed as often with the placebo as with the real reorder, even though `category` comes first in every version. The model reacts to *any* schema change, because the schema is part of its input. So treat a reorder like a prompt change and evaluate it before shipping. Note that this shows how often the answers change, not which version is right more often.
 
 ## When not to do this
 
