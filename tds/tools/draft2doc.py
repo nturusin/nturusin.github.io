@@ -57,6 +57,8 @@ pre { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 8.8pt; line
       page-break-inside: avoid; }
 pre code { background: none; padding: 0; font-size: inherit; }
 figure { margin: 16px 0; page-break-inside: avoid; }
+/* keep a lead-in line ("The core of the parser:") on the same page as what it introduces */
+p:has(+ pre), p:has(+ table) { break-after: avoid; }
 figure img { display: block; width: 100%; height: auto; border: 1px solid #E2E2D8; border-radius: 3px; }
 figcaption { font-family: "Helvetica Neue", Arial, sans-serif; font-size: 9pt; color: #555;
              margin-top: 6px; line-height: 1.4; }
