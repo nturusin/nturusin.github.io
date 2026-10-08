@@ -1,4 +1,4 @@
-Our transaction classifier returns a JSON object with a category, a confidence score, two explanations and a citation. The category and confidence, the only fields the application acts on, fit in roughly the first thirty output tokens. The remaining couple of hundred tokens are prose written for people who may read it later, or never. Until recently we still waited for the closing brace before doing anything.
+At ANNA, our transaction classifier returns a JSON object with a category, a confidence score, two explanations and a citation. The category and confidence, the only fields the application acts on, fit in roughly the first thirty output tokens. The remaining couple of hundred tokens are prose written for people who may read it later, or never. Until recently we still waited for the closing brace before doing anything.
 
 When we reordered the schema so the decision fields come first, and committed them as soon as they were provably complete, median time-to-act on our production path fell from 1.33 to 0.65 seconds. The explanation still arrives; it just no longer blocks anything. This article describes how we did it, what "provably complete" means for a half-received JSON document, and what we had to handle once the request path and the response lifetime came apart.
 
@@ -52,7 +52,7 @@ When a provider enforces a JSON schema during decoding, the field order in the s
 }
 ```
 
-How the order is expressed differs by provider: some have an explicit ordering property, others follow the order of `properties`. Strict modes usually also require every property to be listed in `required` and reject `additionalProperties`. Whatever the API, check that the order survives on the exact model and endpoint you run in production, because this is the assumption everything else rests on.
+How the order is expressed differs by provider: some have an explicit ordering property, others follow the order of `properties`. Strict modes usually also require every property to be listed in `required` and reject `additionalProperties`. Whatever the API, check that the order survives on the exact model and endpoint you run in production, because this is the assumption everything else rests on. Also make every field `required`: in our tests, when only the verdict was required and `confidence` came last, Gemini skipped the explanations entirely and wrote `confidence` straight after `category`.
 
 ![Two token bars of equal length. In schema A the fields sit in the order they were added: a small indigo category segment first, striped essay in the middle, a small indigo confidence segment last, and the commit flag points at the closing brace. In schema B both verdict fields sit first and the commit flag points at token 30.](figures/fig2.png)
 
@@ -148,7 +148,7 @@ The parser turned out to be the small part. Most of the work was in the operatio
 
 ## What we measured
 
-We measured on the production path, not in a test harness. The classifier calls Gemini 3.5 Flash through Vertex AI in `europe-west2`, behind our internal LLM proxy, with the real prompt (about 24,000 input tokens of categorization rules and merchant context) and the real schema, averaging 250 output tokens per response. The numbers below cover 5,000 live calls.
+We measured on the production path, not in a test harness. The classifier calls Gemini 3.5 Flash through Vertex AI in `europe-west2`, behind our internal LLM proxy, with the real prompt (about 28,000 input tokens of categorization rules and merchant context) and the real schema, with a median of about 220 output tokens per response. The numbers below cover 5,000 live calls.
 
 | Metric | Median | Worst observed |
 |---|---|---|
@@ -157,11 +157,20 @@ We measured on the production path, not in a test harness. The classifier calls 
 | Early verdict differed from final JSON | 0 | — |
 | Out-of-order aborts | 0 | — |
 
-<!-- TODO (item 1): schema A vs schema B on the same transactions — category agreement, confidence distribution/calibration. -->
-
 Zero disagreements in 5,000 calls doesn't prove the rate is zero. By the rule of three, the 95% upper bound is about 0.06%. The real guarantee is structural (closing quote, terminator, enum membership); the counts only show that production never contradicted it.
 
-The shape of the workload explains the size of the gain. With 24,000 input tokens and 250 output tokens, prefill is a fixed cost we can't do much about, while the decode tail is the part we control, and early commit removes most of it. The ratio will be different for other systems: it depends on how many tokens come after the last verdict field, not on how fast the model is. If the full response already fits your latency budget, there's nothing here worth the extra complexity.
+Did moving `confidence` ahead of the explanations change the answers? We replayed 400 recent production requests through the same model at temperature 0 with the same prompts, using four schemas: the verdict-first order (A), the same schema again (A′, to measure the model's own run-to-run noise), the legacy order with `confidence` last (B), and a placebo (C) that keeps the verdict first but shuffles the three essay fields. All fields were required in every variant, so only the order differed.
+
+| Comparison | Category changed | Confidence changed | Review routing changed |
+|---|---|---|---|
+| A vs A′ (same schema twice) | 1.8% | 5.0% | 0.3% |
+| A vs B (`confidence` first vs last) | 7.8% | 36% | 1.3% |
+| A vs C (placebo: essay fields shuffled) | 7.3% | 25% | 1.5% |
+
+Moving `confidence` did not shift it in either direction: the mean change was −0.2 points (sign test p = 0.62), and review routing changed about as often as with the placebo. The category column is the more useful lesson. `category` comes first in every variant, yet it changed in 7.8% of requests with the legacy order and 7.3% with the placebo, compared with 1.8% from noise alone. The model is sensitive to *any* change in the schema, presumably because the schema is part of its input. A reorder should therefore be evaluated like a prompt change, not treated as a free refactor. Very few of these transactions have been corrected by a person, so this test measures stability, not which order is more accurate.
+
+
+The shape of the workload explains the size of the gain. With about 28,000 input tokens and 220 output tokens, prefill is a fixed cost we can't do much about, while the decode tail is the part we control, and early commit removes most of it. The ratio will be different for other systems: it depends on how many tokens come after the last verdict field, not on how fast the model is. If the full response already fits your latency budget, there's nothing here worth the extra complexity.
 
 ## When not to do this
 
