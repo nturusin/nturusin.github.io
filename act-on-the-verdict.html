@@ -307,6 +307,7 @@
   </details>
 
   <p style="margin-top:30px">At ANNA, our transaction classifier returns a JSON object with a category, a confidence score, two explanations and a citation. The category and confidence, the only fields the application acts on, fit in roughly the first thirty output tokens. The remaining couple of hundred tokens are prose written for people who may read it later, or never. Until recently we still waited for the closing brace before doing anything.</p>
+  <p>That wait is visible to customers. When someone pays by card, or creates and approves a payment in the app, we show the transaction's category almost immediately, while they are still looking at the screen. Every second the model spends writing explanations that nobody has opened yet adds to that moment.</p>
   <p>When we reordered the schema so the decision fields come first, and committed them as soon as they were provably complete, median time-to-act on our production path fell from 2.03 to 0.99 seconds. The explanation still arrives; it just no longer blocks anything. This article describes how we did it, what "provably complete" means for a half-received JSON document, and what we had to handle once the request path and the response lifetime came apart.</p>
   <h2 id="how-the-response-got-slow">How the response got slow</h2>
   <p>The classifier started with one job: look at a bank transaction and return a category. Coffee in, <code>04_meals</code> out. The response was a few tokens and felt instant.</p>
