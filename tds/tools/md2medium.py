@@ -183,8 +183,9 @@ def build(source: str) -> str:
             para.append(lines[i])
             i += 1
         text = " ".join(para)
-        if text.endswith("plan to ship:"):
-            text = text[:-1] + "; the Resources section below links each provider's documentation."
+        if text.endswith("plan to ship:"):  # the provider list itself moves to Resources
+            text = ("Before relying on it, check schema enforcement, field ordering and chunk behavior on the "
+                    "exact model you plan to ship; the Resources section below links each provider's documentation.")
         out.append(f"<p>{inline(text)}</p>")
 
     out.append("<h2>Resources</h2>")
