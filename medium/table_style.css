@@ -1,0 +1,16 @@
+:root{--ink:#1A1C22;--mut:#5C6470;--dim:#8A919C;--line:#E7E7E1;--line2:#D6D6CF;--verdict:#4338CA;--verdict-ink:#3730A3;--essay-soft:#F0F1F3;
+  --disp:"Avenir Next","Helvetica Neue",Helvetica,system-ui,sans-serif;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+html,body{margin:0;background:#fff;color:var(--ink)}
+#exp{width:760px;padding:18px 26px 16px;box-sizing:border-box;display:flow-root}
+.kicker{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin:0 0 10px}
+table{width:100%;border-collapse:collapse;font-family:var(--disp);font-size:18px}
+th{font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);text-align:left;font-weight:600;padding:10px 12px;border-bottom:1.5px solid var(--line2)}
+td{padding:14px 12px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;vertical-align:top}
+tr:last-child td{border-bottom:none}
+td.num{font-family:var(--mono);font-size:18px;white-space:nowrap}
+td.big{font-family:var(--mono);font-weight:700;color:var(--verdict-ink);font-size:20px;white-space:nowrap}
+.mbar{height:8px;background:var(--essay-soft);border-radius:4px;margin-top:9px;max-width:300px}
+.mbar i{display:block;height:100%;border-radius:4px;background:var(--verdict)}
+.mbar.e i{background:var(--line2)}
+.mbar.n i{background:#A9AEB9}
+code{font-family:var(--mono);font-size:.85em;background:#F4F4EE;border-radius:4px;padding:1px 5px}

@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Medium paste page</title>
+<style>
+:root { --ink:#1A1C22; --mut:#5C6470; --line:#E2E2D8; --accent:#3730A3; --bg:#FAFAF8; --code:#F2F2EC; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --ink:#E9EAEE; --mut:#A6ACB8; --line:#333845; --accent:#B4B2FF; --bg:#101217; --code:#1C1F27; } }
+:root[data-theme="dark"] { --ink:#E9EAEE; --mut:#A6ACB8; --line:#333845; --accent:#B4B2FF; --bg:#101217; --code:#1C1F27; }
+body { margin:0; background:var(--bg); color:var(--ink); font:18px/1.7 Charter, Georgia, serif; }
+.bar { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); padding:12px 16px;
+        font:14px/1.5 system-ui, sans-serif; display:flex; gap:12px; align-items:center; flex-wrap:wrap; z-index:2; }
+.bar button { font:600 14px system-ui, sans-serif; padding:8px 14px; border-radius:8px; border:1px solid var(--accent);
+               background:var(--accent); color:var(--bg); cursor:pointer; }
+.bar .status { color:var(--mut); }
+.head, article { max-width:700px; margin:0 auto; padding:0 16px; }
+.head { padding-top:24px; border-bottom:1px dashed var(--line); padding-bottom:16px; }
+.head .label { font:12px system-ui, sans-serif; letter-spacing:.08em; text-transform:uppercase; color:var(--mut); }
+.head .t { font:700 30px/1.25 system-ui, sans-serif; margin:4px 0 8px; }
+.head .s { font:20px/1.4 system-ui, sans-serif; color:var(--mut); margin:0; }
+h2 { font:700 26px/1.3 system-ui, sans-serif; margin:40px 0 8px; }
+pre { background:var(--code); padding:14px 16px; border-radius:6px; overflow-x:auto; font:14px/1.5 Menlo, monospace; }
+code { font-family:Menlo, monospace; font-size:.85em; background:var(--code); padding:1px 4px; border-radius:3px; }
+pre code { background:none; padding:0; font-size:inherit; }
+figure { margin:28px 0; }
+figure img { width:100%; height:auto; display:block; }
+figcaption { font:14px/1.5 system-ui, sans-serif; color:var(--mut); text-align:center; margin-top:8px; }
+a { color:var(--accent); }
+</style></head>
+<body>
+<div class="bar">
+  <button id="copy">Copy article body</button>
+  <span class="status" id="status">Paste it into a new Medium story, below the title and subtitle.</span>
+</div>
+<div class="head">
+  <div class="label">Type these into Medium by hand (title, then subtitle)</div>
+  <p class="t">Halving LLM time-to-act by reordering your JSON schema</p>
+  <p class="s">How we act on a classifier&#x27;s verdict before the structured response finishes streaming: 2.03s to 0.99s at the median</p>
+</div>
+<article id="body">
+<figure><img src="https://raw.githubusercontent.com/nturusin/nturusin.github.io/tds-v2/tds/figures/cover-featured.jpg" alt="A car waits at a barrier gate whose light is already green and whose boom is lifting."><figcaption>Image by the author, generated with ChatGPT.</figcaption></figure>
+<p>At ANNA, our transaction classifier returns a JSON object with a category, a confidence score, two explanations and a citation. The category and confidence, the only fields the application acts on, fit in roughly the first thirty output tokens. The remaining couple of hundred tokens are prose written for people who may read it later, or never. Until recently we still waited for the closing brace before doing anything.</p>
+<p>That wait is visible to customers. When someone pays by card, or creates and approves a payment in the app, we show the transaction's category almost immediately, while they are still looking at the screen. Every second the model spends writing explanations that nobody has opened yet adds to that moment.</p>
+<p>When we reordered the schema so the decision fields come first, and committed them as soon as they were provably complete, median time-to-act on our production path fell from 2.03 to 0.99 seconds. The explanation still arrives; it just no longer blocks anything. This article describes how we did it, what "provably complete" means for a half-received JSON document, and what we had to handle once the request path and the response lifetime came apart.</p>
+<h2>How the response got slow</h2>
+<p>The classifier started with one job: look at a bank transaction and return a category. Coffee in, <code>04_meals</code> out. The response was a few tokens and felt instant.</p>
+<p>Then the requirements grew, each for a good reason. The app needed to explain a category to the customer, so we added a customer-facing explanation. Our accountants wanted a technical explanation and a pointer to the relevant guidance for reviewing odd cases, so we added an internal explanation and a citation. Finally we added a confidence score to route uncertain transactions to a review queue.</p>
+<p>Each field had a real consumer, but not the same deadline. The category and confidence are needed right away; the explanations are read later, on another screen or during an investigation. Because each field was appended as it was requested, confidence ended up last, and the moment the application could act moved to the end of the response.</p>
+<figure><img src="https://raw.githubusercontent.com/nturusin/nturusin.github.io/tds-v2/tds/figures/fig1.png" alt="Four cumulative bars, one per version of the schema. In v1 the whole response is a single purple category field, and the earliest safe commit sits just after it. v2 appends a grey customer explanation; v3 appends a grey internal explanation and citation. Through all three versions the commit marker stays at the left, just after category. In v4 a second purple field, confidence, is appended at the very end, and the commit marker jumps to the far right, past the entire essay."><figcaption>Figure 1 — How product requests moved the commit point. The field order followed the order of requests, not the order of urgency. Image by the author.</figcaption></figure>
+<p>A typical response, lightly redacted:</p>
+<pre><code>{
+  "category": "09_general_purchase",
+  "confidence": 75,
+  "customer_friendly_explanation": "This purchase has been categorised as a general business purchase. If it was for stock, office equipment, or personal use, you can update the category.",
+  "internal_explanation": "The description denotes a payment to a general online marketplace. No invoice or line-item detail is attached and the amount is small, so the safest default for an ambiguous generic merchant is a general business purchase.",
+  "citation": "Internal bookkeeping guidance, general business purchase."
+}</code></pre>
+<p>I'll call the first two fields the <em>verdict</em> and the rest the <em>essay</em>. The obvious fixes were unattractive. Splitting the work into two model calls would double per-call overhead and rate-limit usage, and the second call could explain a different verdict from the one already committed. Shortening the essay meant taking features away from accountants. What we changed instead was how we read the response we already had.</p>
+<h2>What already exists</h2>
+<p>Streaming structured output is not new. <a href="https://python.useinstructor.com/concepts/partial/">Instructor</a> yields partially filled Pydantic models as tokens arrive, the <a href="https://ai-sdk.dev/v5/cookbook/node/stream-object">Vercel AI SDK</a> exposes a <code>partialObjectStream</code>, and libraries such as <a href="https://www.npmjs.com/package/partial-json">partial-json</a> parse incomplete JSON directly. These tools are built mainly for rendering: show the user something as early as possible.</p>
+<p>Rendering and acting are different problems. A partial object tells you a field has <em>appeared</em>, not that its value is <em>final</em>, and showing a half-finished value for a moment is fine while writing it to a database is not. The rest of this article is about that gap: deciding when a streamed field is safe to act on, and what has to happen after you act on it.</p>
+<h2>Field order is part of the latency budget</h2>
+<p>When a provider enforces a JSON schema during decoding, the field order in the schema is also the order in which values are generated. The last verdict field therefore sets the earliest point at which the application can act. Our fix started with a one-line change in the schema: move <code>confidence</code> up next to <code>category</code>.</p>
+<pre><code>{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "category":   { "type": "string", "enum": ["01_income_employment", "...", "08_personal"] },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 100 },
+    "customer_friendly_explanation": { "type": "string" },
+    "internal_explanation": { "type": "string" },
+    "citation": { "type": "string" }
+  }
+}</code></pre>
+<p>How the order is expressed differs by provider: some have an explicit ordering property, others follow the order of <code>properties</code>. Strict modes usually also require every property to be listed in <code>required</code> and reject <code>additionalProperties</code>. Whatever the API, check that the order survives on the exact model and endpoint you run in production, because this is the assumption everything else rests on. Also make every field <code>required</code>: in our tests, when only the verdict was required and <code>confidence</code> came last, Gemini skipped the explanations entirely and wrote <code>confidence</code> straight after <code>category</code>.</p>
+<figure><img src="https://raw.githubusercontent.com/nturusin/nturusin.github.io/tds-v2/tds/figures/fig2.png" alt="Two token bars of equal length. In schema A the fields sit in the order they were added: a small indigo category segment first, striped essay in the middle, a small indigo confidence segment last, and the commit flag points at the closing brace. In schema B both verdict fields sit first and the commit flag points at token 30."><figcaption>Figure 2 — Same fields and tokens; only the commit point moves. Image by the author.</figcaption></figure>
+<p>Nothing is generated faster. The tokens the application needs simply arrive earlier.</p>
+<p>Moving a field ahead of the text that explains it can, in principle, change what the model outputs, since an autoregressive model conditions each token on everything before it. We checked this separately; see the measurements below.</p>
+<h2>When is a streamed value final?</h2>
+<p>A stream arrives as a sequence of chunks, and their boundaries are arbitrary: a chunk can end inside a string, after the first digit of a number, or just before the comma that closes a value. So the parser always works on the accumulated buffer, never on an individual chunk.</p>
+<p>The hard part is knowing when a value can no longer change. Suppose the buffer currently holds:</p>
+<pre><code>{
+  "category": "04_meals",
+  "confidence": 8</code></pre>
+<p>A partial parser will happily report <code>confidence = 8</code>, but the next chunk might be <code>7,</code>, and the real value is 87. A number is final only once it is followed by a terminator (a comma, a closing brace or whitespace); a string is final only after its closing quote.</p>
+<p>We wanted the early path to be conservative. Missing an early verdict is fine, since the system can wait for the full response or fall back to a deterministic categorizer. Acting on a misparsed verdict is not. Before committing, the parser therefore requires three things:</p>
+<ol><li><strong>The value is complete.</strong> A closing quote for <code>category</code>, a terminator after <code>confidence</code>.</li><li><strong>The value is in the allowed set.</strong> We check <code>category</code> against the same enum used in the schema, even though constrained decoding should already guarantee it. This also covers prefix ambiguity: if both <code>04_meals</code> and <code>04_meals_entertainment</code> exist, seeing <code>04_meals</code> proves nothing until the closing quote arrives.</li><li><strong>The order is intact.</strong> If an essay field appears before the verdict is complete, the provider has broken the ordering contract. We don't try to recover; we abandon the early path and let the normal pipeline handle the request.</li></ol>
+<figure><img src="https://raw.githubusercontent.com/nturusin/nturusin.github.io/tds-v2/tds/figures/fig3.png" alt="Three buffers with their structural evidence and outcome. A complete verdict with its terminator commits. A number without a terminator waits. An essay field arriving before the verdict aborts."><figcaption>Figure 3 — Commit, wait, abort. The middle buffer waits because the next chunk may turn 8 into 87. Image by the author.</figcaption></figure>
+<p>The core of the parser:</p>
+<pre><code>DECISION_RE = re.compile(
+    r'"category"\s*:\s*"(?P&lt;category&gt;[A-Za-z0-9_]+)"\s*,\s*'
+    r'"confidence"\s*:\s*(?P&lt;confidence&gt;\d+(?:\.\d+)?)'
+    r'\s*[,}\s]'   # check 1: terminator required
+)
+
+class DecisionParser:
+    def __init__(self) -&gt; None:
+        self.buffer = ""
+
+    def feed(self, chunk: str) -&gt; Optional[Decision]:
+        self.buffer += chunk
+        match = DECISION_RE.search(self.buffer)
+        if match:
+            category = match.group("category")
+            if category not in CATEGORY_ENUM:          # check 2: membership
+                raise AbortEarlyCommit(category)
+            confidence = float(match.group("confidence"))
+            if not 0 &lt;= confidence &lt;= 100:
+                raise AbortEarlyCommit(confidence)
+            return Decision(category, confidence)
+        # order check only after the match attempt: one chunk may hold
+        # the end of the verdict and the start of the essay
+        if any(m in self.buffer for m in ESSAY_MARKERS):  # check 3: order
+            raise AbortEarlyCommit("essay before verdict")
+        return None</code></pre>
+<p>The order of the checks inside <code>feed</code> matters. A single chunk can contain both the end of <code>confidence</code> and the start of the first explanation, so checking for essay fields first would reject a valid stream. The full listing and tests are in <a href="https://github.com/nturusin/llm-streaming-early-commit">github.com/nturusin/llm-streaming-early-commit</a>; it uses only the standard library.</p>
+<h2>After the commit</h2>
+<p>In our app, a deterministic categorizer shows a provisional category immediately. At a median of about one second the model's verdict replaces it, while the response keeps streaming for roughly another second.</p>
+<p>The open stream is handed to a bounded background worker, which drains the remaining chunks, assembles and validates the complete JSON, checks that the final verdict matches the one already committed, and stores the explanations. The guarantee comes from the structural checks above; the worker is a second line of defense that would surface a mismatch if a provider update ever broke the ordering. If the stream fails during the drain, the verdict stands and the explanation slot stays empty.</p>
+<p>There is one race that has nothing to do with JSON. While the essay is still streaming, a person can change the category.</p>
+<figure><img src="https://raw.githubusercontent.com/nturusin/nturusin.github.io/tds-v2/tds/figures/fig4-override.png" alt="Timeline: at 0.99s the model commits 04_meals, at 1.40s a human changes it to 08_personal, at 2.03s the explanation finishes, at 2.04s the stale explanation is discarded."><figcaption>Figure 4 — The application state can change while the stream is still open. Image by the author.</figcaption></figure>
+<p>So before storing the essay, the worker checks whether the model still owns the decision. If a person has overridden it, the explanation is discarded: it would justify a category the transaction no longer has.</p>
+<p>The parser turned out to be the small part. Most of the work was in the operational details around it:</p>
+<ul><li><strong>Slow verdict.</strong> A hard 2-second deadline for the verdict; on expiry the deterministic pipeline answers. In production this happens for about 7% of live requests.</li><li><strong>Caller disconnects.</strong> Before the commit, cancel the upstream generation. After it, the drain is expected to outlive the request.</li><li><strong>Retries.</strong> Never retry a live stream: a retry is a second generation, a second bill and a race between two commits.</li><li><strong>Proxy buffering.</strong> Any layer in between can silently batch the stream. Everything still works, just late, so test incrementality end to end.</li><li><strong>Connection pressure.</strong> Bound the background drains (we run 64) and size connection pools for the full response lifetime, not the verdict time.</li><li><strong>Deploys.</strong> Decide explicitly what happens to in-flight drains. The verdicts are safe; only explanations are lost.</li><li><strong>Usage accounting.</strong> Token usage often arrives in the final chunk, so a stream closed early makes cost dashboards undercount.</li><li><strong>Cost.</strong> Closing the stream right after the verdict saves output tokens but loses the essay. That is a separate trade-off with different product semantics.</li></ul>
+<h2>What we measured</h2>
+<p>These numbers come from production: 288,298 live requests between August and early October 2026. They are timed inside our service, so they include the network and our LLM proxy, not just the model.</p>
+<figure><img src="https://raw.githubusercontent.com/nturusin/nturusin.github.io/tds-v2/medium/img/table-latency.png" alt="Table: median and p90 latency on the production path over 288,298 live requests. Time to early verdict: 0.99s median, 1.29s p90. Time to complete response: 2.03s median, 2.50s p90."><figcaption>Latency on the production path. Image by the author.</figcaption></figure>
+<p>The early verdict always matched the completed response: zero mismatches. That doesn't prove the rate is zero, but it puts it below about 0.001%. About 7% of requests missed the 2-second deadline and were answered by the deterministic pipeline instead.</p>
+<p>Why roughly half? Each request carries about 28,000 input tokens and produces about 220 output tokens. Reading the input is a fixed cost; early commit removes most of the time spent writing the output. Your ratio will depend on how much of the response comes after the decision fields. If the full response already fits your latency budget, this isn't worth the extra complexity.</p>
+<p><strong>Does the new order change the answers?</strong> We replayed 400 production requests at temperature 0 with three schemas: the current verdict-first order, the old order with <code>confidence</code> last, and a placebo that keeps the verdict first but shuffles the explanation fields. We also ran the current schema a second time to measure the model's own noise.</p>
+<figure><img src="https://raw.githubusercontent.com/nturusin/nturusin.github.io/tds-v2/medium/img/table-experiment.png" alt="Table: share of 400 replayed production requests whose category changed compared with the current schema. Same schema run again: 1.8%. Old order with confidence last: 7.8%. Placebo with explanations shuffled: 7.3%."><figcaption>How often the category changed when the same requests were replayed with a different schema. Image by the author.</figcaption></figure>
+<p>Confidence didn't shift in either direction (average change −0.2 points). But the category changed as often with the placebo as with the real reorder, even though <code>category</code> comes first in every version. The model reacts to <em>any</em> schema change, because the schema is part of its input. So treat a reorder like a prompt change and evaluate it before shipping. Note that this shows how often the answers change, not which version is right more often.</p>
+<h2>When not to do this</h2>
+<ul><li><strong>The decision can't be made a short, closed-set value.</strong> Free-form answers have no reliable point at which they are final, and a verdict that needs later fields to be interpreted is not a verdict.</li><li><strong>The provider doesn't give you constrained decoding with stable field order on streamed output.</strong> Then there is nothing safe to commit early, and the right behavior is to wait.</li><li><strong>There is no deterministic fallback, or the full response is already fast enough.</strong> Early commit adds concurrency, parsing and lifecycle management, and only pays off when the latency matters.</li></ul>
+<h2>Trying it on your system</h2>
+<p>Put a closed-set decision first and the long explanation last, stream the response, and record when the decision becomes structurally final compared with when the response completes. The repository includes a probe that does this against a real model and reports whether the field order held, whether the early verdict matched the final object, and how much time came off the critical path.</p>
+<p>Before relying on it, check schema enforcement, field ordering and chunk behavior in your provider's documentation and on the exact model you plan to ship; the Resources section below links each provider's documentation.</p>
+<p>None of the individual pieces is new: constrained decoding, incremental parsing, background work and fallbacks are all standard. What changes is <em>when</em> the system is allowed to act. A structured response doesn't have to be complete for part of it to be final.</p>
+<h2>Resources</h2>
+<p><strong>Code and tests for this article:</strong> <a href="https://github.com/nturusin/llm-streaming-early-commit">llm-streaming-early-commit</a></p>
+<p><strong>Partial-JSON streaming libraries:</strong> <a href="https://python.useinstructor.com/concepts/partial/">Instructor: partial responses</a>, <a href="https://ai-sdk.dev/v5/cookbook/node/stream-object">Vercel AI SDK: streamObject</a>, <a href="https://www.npmjs.com/package/partial-json">partial-json</a></p>
+<p><strong>Provider documentation:</strong></p>
+<ul><li><strong>OpenAI</strong> — <a href="https://developers.openai.com/api/docs/guides/structured-outputs">Structured Outputs</a> · <a href="https://developers.openai.com/api/docs/guides/streaming-responses">Streaming Responses</a></li><li><strong>Anthropic</strong> — <a href="https://platform.claude.com/docs/en/build-with-claude/structured-outputs">Structured Outputs</a> · <a href="https://platform.claude.com/docs/en/build-with-claude/streaming">Streaming Messages</a></li><li><strong>Google Gemini</strong> — <a href="https://ai.google.dev/gemini-api/docs/structured-output">Structured Outputs</a></li><li><strong>Amazon Bedrock</strong> — <a href="https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html">Structured Outputs</a></li><li><strong>vLLM</strong> — <a href="https://docs.vllm.ai/en/latest/features/structured_outputs/">Structured Outputs</a></li></ul>
+<p><em>Originally published on my blog: <a href="https://nturusin.github.io/act-on-the-verdict.html">nturusin.github.io</a>.</em></p>
+</article>
+<script>
+document.getElementById("copy").addEventListener("click", function () {
+  var range = document.createRange();
+  range.selectNodeContents(document.getElementById("body"));
+  var sel = window.getSelection();
+  sel.removeAllRanges(); sel.addRange(range);
+  var ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) {}
+  document.getElementById("status").textContent = ok
+    ? "Copied. Now paste into Medium (Cmd+V)."
+    : "Copy failed: the text is selected, press Cmd+C.";
+});
+</script>
+</body></html>
