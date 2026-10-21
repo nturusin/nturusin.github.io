@@ -491,7 +491,7 @@
   <p>The order of the checks inside <code>feed</code> matters. A single chunk can contain both the end of <code>confidence</code> and the start of the first explanation, so checking for essay fields first would reject a valid stream. The full listing and tests are in <a href="https://github.com/nturusin/llm-streaming-early-commit" target="_blank" rel="noopener">github.com/nturusin/llm-streaming-early-commit</a>; it uses only the standard library.</p>
   <h2 id="after-the-commit">After the commit</h2>
   <p>In our app, a deterministic categorizer shows a provisional category immediately. At a median of about one second the model's verdict replaces it, while the response keeps streaming for roughly another second.</p>
-  <p>The open stream is handed to a bounded background worker, which drains the remaining chunks, assembles and validates the complete JSON, checks that the final verdict matches the one already committed, and stores the explanations. The guarantee comes from the structural checks above; the worker is a second line of defence that would surface a mismatch if a provider update ever broke the ordering. If the stream fails during the drain, the verdict stands and the explanation slot stays empty.</p>
+  <p>The open stream is handed to a bounded background worker, which drains the remaining chunks, assembles and validates the complete JSON, checks that the final verdict matches the one already committed, and stores the explanations. The guarantee comes from the structural checks above; the worker is a second line of defense that would surface a mismatch if a provider update ever broke the ordering. If the stream fails during the drain, the verdict stands and the explanation slot stays empty.</p>
   <p>There is one race that has nothing to do with JSON. While the essay is still streaming, a person can change the category.</p>
   <div class="orace" role="img" aria-label="Four timestamped events: at 0.99 seconds the model commits meals. At 1.40 a human changes it to personal. At 2.03 the explanation finishes. At 2.04 the stale explanation is discarded.">
     <div class="r mod"><span class="t">0.99s</span><span class="w">model</span><span><b style="color:var(--verdict-ink)">04_meals</b> committed; the user sees it</span></div>
@@ -538,12 +538,12 @@
   <h2 id="when-not-to-do-this">When not to do this</h2>
   <ul class="gotchas">
     <li><b>The decision can't be made a short, closed-set value.</b> Free-form answers have no reliable point at which they are final, and a verdict that needs later fields to be interpreted is not a verdict.</li>
-    <li><b>The provider doesn't give you constrained decoding with stable field order on streamed output.</b> Then there is nothing safe to commit early, and the right behaviour is to wait.</li>
+    <li><b>The provider doesn't give you constrained decoding with stable field order on streamed output.</b> Then there is nothing safe to commit early, and the right behavior is to wait.</li>
     <li><b>There is no deterministic fallback, or the full response is already fast enough.</b> Early commit adds concurrency, parsing and lifecycle management, and only pays off when the latency matters.</li>
   </ul>
   <h2 id="trying-it-on-your-system">Trying it on your system</h2>
   <p>Put a closed-set decision first and the long explanation last, stream the response, and record when the decision becomes structurally final compared with when the response completes. The repository includes a probe that does this against a real model and reports whether the field order held, whether the early verdict matched the final object, and how much time came off the critical path.</p>
-  <p>Before relying on it, check schema enforcement, field ordering and chunk behaviour in your provider's documentation and on the exact model you plan to ship:</p>
+  <p>Before relying on it, check schema enforcement, field ordering and chunk behavior in your provider's documentation and on the exact model you plan to ship:</p>
   <ul class="reflist">
     <li>
       <div class="rh"><span class="pv">OpenAI</span><a href="https://developers.openai.com/api/docs/guides/structured-outputs" target="_blank" rel="noopener">Structured Outputs</a><span class="sep">·</span><a href="https://developers.openai.com/api/docs/guides/streaming-responses" target="_blank" rel="noopener">Streaming Responses</a></div>
